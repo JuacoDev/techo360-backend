@@ -1,0 +1,20 @@
+# ============================================================
+# COPIAR ESTE ARCHIVO A: techo360-backend/.github/workflows/deploy.yml
+# ============================================================
+name: Deploy Techo 360 - Backend
+
+on:
+  push:
+    branches: [development]
+
+jobs:
+  deploy-backend:
+    runs-on: self-hosted
+    steps:
+      - name: Checkout del codigo
+        uses: actions/checkout@v4
+
+      - name: Desplegar SOLO el backend
+        run: |
+          chmod +x /opt/techo360/techo360-infra/scripts/deploy-service.sh
+          /opt/techo360/techo360-infra/scripts/deploy-service.sh backend
