@@ -1,11 +1,7 @@
 from fastapi import FastAPI
 
+from routers import health
+
 app = FastAPI(title="Techo 360 - Backend")
 
-@app.get("/")
-def root():
-    return {"status": "ok", "service": "backend"}
-
-@app.get("/health")
-def health():
-    return {"status": "healthy"}
+app.include_router(health.router)
