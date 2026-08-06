@@ -11,3 +11,6 @@ def root():
 @router.get("/health")
 def health():
     return {"status": "healthy"}
+
+
+# prueba CI/CD
