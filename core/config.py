@@ -6,6 +6,9 @@ class Settings(BaseSettings):
     database_users_url: str
     redis_url: str = "redis://redis:6379/0"
     rabbitmq_url: str
+    brevo_api_key: str
+    brevo_sender_email: str = "juan.tellez@upb.edu.co"
+    brevo_sender_name: str = "Techo 360"
 
     class Config:
         env_file = ".env"
