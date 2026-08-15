@@ -37,6 +37,13 @@ PLAN_DE_VARIABLES_GEOMETRIA = {
     "conectividad_vial": ViasAdapter,
 }
 
+# Bbox aproximado de Colombia continental completa (sur, oeste, norte, este)
+# -- usado como respaldo para Overpass/OSM cuando INVIAS no responde. No es
+# precisamente el area de un municipio (el pipeline no filtra vias por
+# municipio todavia, trae la red completa) -- ver la nota de diseño en
+# el README sobre esta simplificacion.
+BBOX_COLOMBIA = (-4.23, -79.0, 13.5, -66.8)
+
 
 def run(
     anio: int | None = None,
@@ -139,7 +146,9 @@ def run(
         adapter = adaptadores_geometria[adapter_cls]
 
         try:
-            registros: list[GeometryRecord] = adapter.fetch([variable], anio=anio)
+            registros: list[GeometryRecord] = adapter.fetch(
+                [variable], anio=anio, bbox_respaldo=BBOX_COLOMBIA
+            )
             logger.info(f"[{adapter.nombre}] '{variable}' -- {len(registros)} segmentos de geometria obtenidos")
             resultados["ok"].append((variable, adapter.nombre, len(registros), 0))
             if database_url is not None and registros:
