@@ -32,7 +32,7 @@ from ingestion.base import DataSourceAdapter, GeometryRecord
 logger = logging.getLogger(__name__)
 
 INVIAS_FEATURE_SERVER_URL = (
-    "https://inviasopendata-invias.opendata.arcgis.com/datasets/red-vial-nacional/FeatureServer/0/query"
+    "https://hermes.invias.gov.co/arcgis/rest/services/OpenData/ServiciosOpenData/FeatureServer/0/query"
 )
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
 

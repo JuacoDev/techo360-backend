@@ -1,90 +1,68 @@
 """
 Adaptador del Fondo Nacional del Ahorro (FNA) -- dataset "Proyectos
-vivienda nueva", tambien via Socrata API (mismo tipo de acceso que
-TerriData).
+vivienda nueva".
 
-Dataset id: "8njd-mfua"
-Endpoint: https://www.datos.gov.co/resource/8njd-mfua.json
+>>> ESTADO: BLOQUEADO, confirmado con evidencia real, no es una
+>>> suposicion <<<
+
+El dataset "8njd-mfua" ("Proyectos vivienda nueva") si existio y estuvo
+activo en datos.gov.co -- hay registro de acceso real de 2021
+(confirmado via busqueda). Pero al consultar el endpoint real desde la
+VPS (con red real hacia datos.gov.co, algo que nunca se pudo probar
+antes desde este entorno de desarrollo), la API respondio:
+
+    404 Not Found — https://www.datos.gov.co/resource/8njd-mfua.json
+
+Se investigo si el dataset se movio a otro ID o portal, sin encontrar
+un reemplazo confirmado. Todo indica que el FNA dio de baja este
+dataset del portal en algun momento despues de 2021 -- no es un
+problema de nombres de columna ni de la forma de consultarlo, es que
+el dataset ya no esta publicado ahi.
 
 Variable objetivo: "Cercania a constructoras o proyectos de vivienda
-accesible" -- se calcula a partir de la cantidad de proyectos VIS/VIP
-registrados por municipio (no distancia geografica literal, sino
-disponibilidad de oferta de vivienda accesible en la zona).
+accesible".
 
-IMPORTANTE: a diferencia de TerriData (donde ya se probaron los nombres
-de columna), este dataset NUNCA se ha consultado en vivo desde este
-entorno -- no hay red hacia datos.gov.co desde aqui. Los nombres de
-columna de abajo (COLUMNAS_ESPERADAS, campos usados en fetch()) son la
-mejor suposicion basada en el patron tipico de datasets de vivienda de
-Socrata Colombia, NO estan confirmados. La primera corrida en la VPS
-debe usar `obtener_muestra()` para confirmarlos y ajustar este archivo
-si hace falta -- por eso el metodo existe.
+Para desbloquear esto: buscar si el FNA republico esta informacion en
+otro lugar (su propio portal mivivienda.fna.gov.co, que si tiene un
+buscador web de proyectos, aunque sin confirmar si expone una API), o
+aceptar que esta variable especifica queda fuera de alcance del
+proyecto por ahora.
 """
 import logging
 
 import httpx
 
-from ingestion.base import DataSourceAdapter, IndicadorRecord
+from ingestion.base import DataSourceAdapter, DataSourceUnavailableError, IndicadorRecord
 from ingestion.validacion_esquema import verificar_esquema
 
 logger = logging.getLogger(__name__)
 
 BASE_URL = "https://www.datos.gov.co/resource/8njd-mfua.json"
 
-# MEJOR SUPOSICION, no confirmada -- ajustar con obtener_muestra() en la
-# primera corrida real.
 COLUMNAS_ESPERADAS = {"municipio", "tipo_vivienda", "nombre_proyecto"}
 
 
 class FNAAdapter(DataSourceAdapter):
     nombre = "FNA"
-    disponible = True
+    disponible = False
+    motivo_bloqueo = (
+        "El dataset '8njd-mfua' (Proyectos vivienda nueva) devuelve 404 "
+        "Not Found al consultarlo -- confirmado con una peticion real "
+        "desde la VPS, no es una suposicion. El dataset parece haber "
+        "sido dado de baja del portal datos.gov.co despues de 2021. No "
+        "se encontro un ID de reemplazo confirmado."
+    )
 
     def __init__(self, timeout: float = 15.0):
         self._timeout = timeout
 
     def obtener_muestra(self, limite: int = 5) -> list[dict]:
-        """Trae una muestra pequeña para confirmar los nombres reales de
-        columna antes de la primera corrida completa -- ver el aviso en
-        el docstring del modulo."""
+        """Se deja el metodo por si en el futuro se encuentra un dataset
+        de reemplazo -- hoy en dia va a fallar con 404, igual que fetch()."""
         with httpx.Client(timeout=self._timeout) as client:
             response = client.get(BASE_URL, params={"$limit": limite})
             response.raise_for_status()
             return response.json()
 
     def fetch(self, variables: list[str], anio: int | None = None) -> list[IndicadorRecord]:
-        """Cuenta proyectos VIS/VIP registrados por municipio y lo
-        convierte en un IndicadorRecord por municipio (variable =
-        'cercania_constructoras_vis', valor = numero de proyectos)."""
-        if "cercania_constructoras_vis" not in variables:
-            return []
-
-        muestra = self.obtener_muestra(limite=5)
-        verificar_esquema(self.nombre, muestra, COLUMNAS_ESPERADAS)
-
-        with httpx.Client(timeout=self._timeout) as client:
-            params = {"$select": "municipio, count(*) as total_proyectos", "$group": "municipio"}
-            if anio is not None:
-                # Filtro de año best-effort -- el nombre real de la columna
-                # de fecha/año no esta confirmado, ver docstring del modulo.
-                params["$where"] = f"date_extract_y(fecha_registro)={anio}"
-
-            response = client.get(BASE_URL, params=params)
-            response.raise_for_status()
-            filas = response.json()
-
-        records: list[IndicadorRecord] = []
-        for fila in filas:
-            try:
-                records.append(IndicadorRecord(
-                    codigo_divipola="",  # el dataset probablemente da nombre, no codigo DIVIPOLA -- revisar en obtener_muestra()
-                    entidad_territorial=fila.get("municipio", "").strip(),
-                    variable="cercania_constructoras_vis",
-                    valor=float(fila.get("total_proyectos", 0)),
-                    anio=anio or 0,
-                    fuente=self.nombre,
-                ))
-            except (TypeError, ValueError):
-                continue
-
-        return records
+        raise DataSourceUnavailableError(self.motivo_bloqueo)
