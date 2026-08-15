@@ -25,6 +25,7 @@ import logging
 import httpx
 
 from ingestion.base import DataSourceAdapter, IndicadorRecord
+from ingestion.validacion_esquema import verificar_esquema
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +58,9 @@ class FNAAdapter(DataSourceAdapter):
         'cercania_constructoras_vis', valor = numero de proyectos)."""
         if "cercania_constructoras_vis" not in variables:
             return []
+
+        muestra = self.obtener_muestra(limite=5)
+        verificar_esquema(self.nombre, muestra, COLUMNAS_ESPERADAS)
 
         with httpx.Client(timeout=self._timeout) as client:
             params = {"$select": "municipio, count(*) as total_proyectos", "$group": "municipio"}

@@ -9,6 +9,7 @@ import logging
 import httpx
 
 from ingestion.base import DataSourceAdapter, IndicadorRecord
+from ingestion.validacion_esquema import verificar_esquema
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +88,12 @@ class TerriDataAdapter(DataSourceAdapter):
             return response.json()
 
     def fetch(self, variables: list[str], anio: int | None = None) -> list[IndicadorRecord]:
+        # Verificar esquema ANTES de traer todo -- si TerriData cambio de
+        # formato, esto lanza EsquemaCambiadoError y run.py lo captura
+        # para alertar al admin, en vez de traer datos mal formados.
+        muestra = self.obtener_muestra(limite=5)
+        verificar_esquema(self.nombre, muestra, COLUMNAS_ESPERADAS)
+
         records: list[IndicadorRecord] = []
 
         with httpx.Client(timeout=self._timeout) as client:

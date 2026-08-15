@@ -166,4 +166,46 @@ def run(
 
 
 if __name__ == "__main__":
-    run()
+    import argparse
+    import os
+
+    parser = argparse.ArgumentParser(
+        description="Corre el pipeline de ingesta de datos manualmente. "
+                     "Sin argumentos, corre en modo SOLO-VALIDAR (no guarda nada)."
+    )
+    parser.add_argument(
+        "--anio", type=int, default=None,
+        help="Año a consultar en las fuentes (ej. 2023). Si se omite, "
+             "cada fuente usa su propio comportamiento por defecto "
+             "(TerriData/FNA devuelven todos los años disponibles sin filtrar).",
+    )
+    parser.add_argument(
+        "--database-url", type=str, default=os.environ.get("DATABASE_URL"),
+        help="URL de conexion a postgres-principal. Si se omite, se usa la "
+             "variable de entorno DATABASE_URL (ya deberia estar seteada "
+             "dentro del contenedor del backend). Si ninguna esta disponible, "
+             "el pipeline corre en modo solo-validar.",
+    )
+    parser.add_argument(
+        "--dry-run", action="store_true",
+        help="Fuerza el modo solo-validar aunque haya una URL de base de "
+             "datos disponible -- no guarda nada, solo reporta que pasaria.",
+    )
+    args = parser.parse_args()
+
+    db_url = None if args.dry_run else args.database_url
+
+    if db_url is None:
+        print(
+            "AVISO: corriendo en modo SOLO-VALIDAR -- no se va a guardar nada "
+            "en la base. Usa --database-url (o la variable de entorno "
+            "DATABASE_URL) para guardar de verdad.\n"
+        )
+    if args.anio is None:
+        print(
+            "AVISO: no se especifico --anio -- cada fuente trae su propio "
+            "rango de años por defecto (revisa el resumen final para ver "
+            "que años llegaron realmente).\n"
+        )
+
+    run(anio=args.anio, database_url=db_url)
