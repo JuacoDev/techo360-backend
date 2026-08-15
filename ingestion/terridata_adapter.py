@@ -1,14 +1,42 @@
 """
 Adaptador de TerriData (DNP), via su espejo en datos.gov.co (Socrata API).
 
-Dataset: DNP-Terridata, id "64cq-xb2k"
-Endpoint: https://www.datos.gov.co/resource/64cq-xb2k.json
+>>> ESTADO: BLOQUEADO, confirmado con evidencia real, no es una
+>>> suposicion -- y esto tiene impacto grande, no es un detalle menor <<<
+
+El dataset "64cq-xb2k" (DNP-Terridata) devuelve 404 al consultarlo,
+confirmado con una peticion real desde la VPS. Se descarto que sea un
+problema del portal completo: otro dataset conocido y estable
+(gdxc-w37w, DIVIPOLA - Codigos municipios) SI responde 200 desde la
+misma VPS, en el mismo momento. El problema es especifico de este
+dataset, no del portal `datos.gov.co` en general.
+
+Se investigo si el dataset se movio a otro ID dentro de datos.gov.co,
+sin encontrar reemplazo. Se encontro evidencia de que TerriData migro
+a un portal propio del DNP (aparece tanto `terridata.dnp.gov.co` como
+un portal aparente mas nuevo, `ddtspr.dnp.gov.co/TDPR/`) -- es decir,
+la herramienta sigue viva y mantenida, pero el espejo en datos.gov.co
+del que dependia este adaptador fue descontinuado.
+
+IMPACTO: esto bloquea 6 de las 7 variables originales del proyecto
+(todas las que dependian de TerriData): deficit habitacional
+(cuantitativo y cualitativo), densidad poblacional, cobertura de
+acueducto y alcantarillado, y tenencia informal de terrenos. Solo
+"conectividad_vial" (INVIAS/OSM) sigue con fuente activa.
+
+Para desbloquear esto se necesita algo que NO se puede hacer solo con
+busquedas: inspeccionar el trafico de red (pestaña Network del
+navegador) mientras se navega `ddtspr.dnp.gov.co/TDPR/` o
+`terridata.dnp.gov.co`, para ver si el visor hace llamadas a alguna
+API interna que se pueda reusar (patron comun en dashboards
+gubernamentales hechos en JS). Esto requiere que alguien del equipo
+lo haga manualmente en un navegador real.
 """
 import logging
 
 import httpx
 
-from ingestion.base import HTTP_HEADERS, DataSourceAdapter, IndicadorRecord
+from ingestion.base import HTTP_HEADERS, DataSourceAdapter, DataSourceUnavailableError, IndicadorRecord
 from ingestion.validacion_esquema import verificar_esquema
 
 logger = logging.getLogger(__name__)
@@ -37,7 +65,17 @@ VARIABLES_PENDIENTES_DE_RESOLVER = {
 
 class TerriDataAdapter(DataSourceAdapter):
     nombre = "TerriData"
-    disponible = True
+    disponible = False
+    motivo_bloqueo = (
+        "El dataset '64cq-xb2k' devuelve 404 -- confirmado con una peticion "
+        "real desde la VPS, y se descarto que sea el portal completo (otro "
+        "dataset conocido, gdxc-w37w, SI responde 200 al mismo tiempo). "
+        "TerriData parece haber migrado a un portal propio del DNP "
+        "(terridata.dnp.gov.co / ddtspr.dnp.gov.co), sin dejar un "
+        "reemplazo publicado en datos.gov.co. Bloquea 6 de las 7 "
+        "variables originales del proyecto -- ver el docstring del "
+        "modulo para el detalle completo y como desbloquearlo."
+    )
 
     def __init__(self, timeout: float = 15.0):
         self._timeout = timeout
@@ -88,6 +126,9 @@ class TerriDataAdapter(DataSourceAdapter):
             return response.json()
 
     def fetch(self, variables: list[str], anio: int | None = None) -> list[IndicadorRecord]:
+        if not self.disponible:
+            raise DataSourceUnavailableError(self.motivo_bloqueo)
+
         # Verificar esquema ANTES de traer todo -- si TerriData cambio de
         # formato, esto lanza EsquemaCambiadoError y run.py lo captura
         # para alertar al admin, en vez de traer datos mal formados.
