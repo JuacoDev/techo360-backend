@@ -6,3 +6,4 @@ pydantic-settings==2.5.2
 httpx
 redis
 pydantic[email]
+apscheduler
