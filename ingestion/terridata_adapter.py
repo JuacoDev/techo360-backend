@@ -8,7 +8,7 @@ import logging
 
 import httpx
 
-from ingestion.base import DataSourceAdapter, IndicadorRecord
+from ingestion.base import HTTP_HEADERS, DataSourceAdapter, IndicadorRecord
 from ingestion.validacion_esquema import verificar_esquema
 
 logger = logging.getLogger(__name__)
@@ -44,7 +44,7 @@ class TerriDataAdapter(DataSourceAdapter):
         self._cache_resueltas: dict[str, str] = {}
 
     def buscar_variables_por_palabra_clave(self, palabra_clave: str) -> list[str]:
-        with httpx.Client(timeout=self._timeout) as client:
+        with httpx.Client(timeout=self._timeout, headers=HTTP_HEADERS) as client:
             params = {
                 "$select": "variable",
                 "$where": f"upper(variable) like upper('%{palabra_clave}%')",
@@ -82,7 +82,7 @@ class TerriDataAdapter(DataSourceAdapter):
     def obtener_muestra(self, limite: int = 5) -> list[dict]:
         """Trae una muestra pequeña, para verificar el esquema antes de
         traer todo (ver ingestion/validacion_esquema.py)."""
-        with httpx.Client(timeout=self._timeout) as client:
+        with httpx.Client(timeout=self._timeout, headers=HTTP_HEADERS) as client:
             response = client.get(BASE_URL, params={"$limit": limite})
             response.raise_for_status()
             return response.json()
@@ -96,7 +96,7 @@ class TerriDataAdapter(DataSourceAdapter):
 
         records: list[IndicadorRecord] = []
 
-        with httpx.Client(timeout=self._timeout) as client:
+        with httpx.Client(timeout=self._timeout, headers=HTTP_HEADERS) as client:
             for var_interna in variables:
                 if var_interna in MAPEO_VARIABLES:
                     var_terridata = MAPEO_VARIABLES[var_interna]

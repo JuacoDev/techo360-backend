@@ -9,6 +9,16 @@ de la misma forma, sin importar que tan distinta sea cada una por dentro.
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
+# User-Agent compartido para todas las peticiones HTTP del pipeline.
+# Muchos servidores gubernamentales (detras de WAFs tipo Akamai/Cloudflare)
+# bloquean o tratan distinto las peticiones con el User-Agent generico que
+# pone httpx por defecto -- esto identifica claramente de donde viene la
+# peticion, como piden explicitamente las politicas de uso de APIs como
+# Overpass.
+HTTP_HEADERS = {
+    "User-Agent": "Techo360-UPB-Bucaramanga/1.0 (proyecto academico, contacto: juan.tellez@upb.edu.co)"
+}
+
 
 @dataclass
 class IndicadorRecord:

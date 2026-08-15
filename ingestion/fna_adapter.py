@@ -32,7 +32,7 @@ import logging
 
 import httpx
 
-from ingestion.base import DataSourceAdapter, DataSourceUnavailableError, IndicadorRecord
+from ingestion.base import DataSourceAdapter, DataSourceUnavailableError, HTTP_HEADERS, IndicadorRecord
 from ingestion.validacion_esquema import verificar_esquema
 
 logger = logging.getLogger(__name__)
@@ -59,7 +59,7 @@ class FNAAdapter(DataSourceAdapter):
     def obtener_muestra(self, limite: int = 5) -> list[dict]:
         """Se deja el metodo por si en el futuro se encuentra un dataset
         de reemplazo -- hoy en dia va a fallar con 404, igual que fetch()."""
-        with httpx.Client(timeout=self._timeout) as client:
+        with httpx.Client(timeout=self._timeout, headers=HTTP_HEADERS) as client:
             response = client.get(BASE_URL, params={"$limit": limite})
             response.raise_for_status()
             return response.json()

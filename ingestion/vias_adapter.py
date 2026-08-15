@@ -27,7 +27,7 @@ import logging
 
 import httpx
 
-from ingestion.base import DataSourceAdapter, GeometryRecord
+from ingestion.base import DataSourceAdapter, GeometryRecord, HTTP_HEADERS
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +50,7 @@ class ViasAdapter(DataSourceAdapter):
         self._timeout = timeout
 
     def obtener_muestra_invias(self, limite: int = 5) -> list[dict]:
-        with httpx.Client(timeout=self._timeout) as client:
+        with httpx.Client(timeout=self._timeout, headers=HTTP_HEADERS) as client:
             params = {
                 "where": "1=1",
                 "outFields": "*",
@@ -63,7 +63,7 @@ class ViasAdapter(DataSourceAdapter):
             return data.get("features", [])
 
     def _fetch_invias(self, codigo_divipola: str | None) -> list[GeometryRecord]:
-        with httpx.Client(timeout=self._timeout) as client:
+        with httpx.Client(timeout=self._timeout, headers=HTTP_HEADERS) as client:
             params = {"where": "1=1", "outFields": "*", "f": "geojson", "resultRecordCount": 2000}
             response = client.get(INVIAS_FEATURE_SERVER_URL, params=params)
             response.raise_for_status()
@@ -91,14 +91,20 @@ class ViasAdapter(DataSourceAdapter):
         return records
 
     def _fetch_osm(self, codigo_divipola: str, bbox: tuple[float, float, float, float]) -> list[GeometryRecord]:
-        """Respaldo via Overpass API. `bbox` = (sur, oeste, norte, este)."""
+        """Respaldo via Overpass API. `bbox` = (sur, oeste, norte, este).
+
+        IMPORTANTE: Overpass exige un User-Agent descriptivo en su
+        politica de uso publica -- sin esto, overpass-api.de responde
+        406/403 aunque la consulta este bien formada (confirmado con
+        un 406 real en produccion antes de este fix). Usa el mismo
+        HTTP_HEADERS compartido del resto del pipeline."""
         sur, oeste, norte, este = bbox
         query = f"""
         [out:json][timeout:25];
         way["highway"]({sur},{oeste},{norte},{este});
         out geom;
         """
-        with httpx.Client(timeout=self._timeout) as client:
+        with httpx.Client(timeout=self._timeout, headers=HTTP_HEADERS) as client:
             response = client.post(OVERPASS_URL, data={"data": query})
             response.raise_for_status()
             data = response.json()
