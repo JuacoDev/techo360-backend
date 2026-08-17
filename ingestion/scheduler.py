@@ -10,13 +10,26 @@ Como integrarlo en techo360-backend (main.py):
 
     ADMIN_EMAIL = "juan.tellez@upb.edu.co"  # o el que corresponda
 
-    def notificar_admin(asunto: str, mensaje: str):
-        import asyncio
-        asyncio.create_task(email_service.send_alert(ADMIN_EMAIL, asunto, mensaje))
-
     @app.on_event("startup")
     async def startup():
         import redis.asyncio as aioredis
+        # IMPORTANTE: capturar el event loop AQUI, mientras estamos
+        # corriendo dentro de el (startup es async). notificar_admin se
+        # va a llamar despues desde un hilo worker aparte (el pipeline
+        # corre via asyncio.to_thread dentro del scheduler, para no
+        # bloquear el backend) -- ese hilo NO tiene su propio event loop,
+        # asi que asyncio.create_task() ahi adentro falla con
+        # "RuntimeError: no running event loop" (esto paso de verdad en
+        # produccion la primera vez que corrio el scheduler). La forma
+        # correcta de mandar una corutina desde un hilo distinto al loop
+        # principal es run_coroutine_threadsafe(), no create_task().
+        loop = asyncio.get_running_loop()
+
+        def notificar_admin(asunto: str, mensaje: str):
+            asyncio.run_coroutine_threadsafe(
+                email_service.send_alert(ADMIN_EMAIL, asunto, mensaje), loop
+            )
+
         redis_client = aioredis.from_url(settings.redis_url, decode_responses=True)
         iniciar_scheduler(redis_client, settings.database_url, notificar_admin)
 """

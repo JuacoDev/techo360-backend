@@ -1,42 +1,32 @@
 """
-Adaptador de TerriData (DNP) v2 -- via el portal REAL y funcional
-(terridata.dnp.gov.co), no via datos.gov.co (retirado, confirmado 404)
-ni via el portal "nuevo" que resulto estar roto (ddtspr.dnp.gov.co/TDPR/,
-confirmado en 2 sesiones distintas, dias aparte: jQuery y Google
-Analytics fallan al cargar ahi, bloqueando los botones de descarga).
+Adaptador de TerriData (DNP) v3 -- esquema real CONFIRMADO desde
+produccion (no es una suposicion, esta vez de verdad).
 
-Confirmado en vivo con un navegador real (Chrome, sesion interactiva):
-- terridata.dnp.gov.co es un portal DISTINTO, con su propia API REST
-  (FITService.svc) y archivos ZIP descargables directos por dimension,
-  sin autenticacion. Confirmado: GET a un .zip real devuelve 200,
-  content-type application/x-zip-compressed, ~4MB.
+La primera corrida real del scheduler (VPS, 2026-08-17) trajo el
+esquema exacto en el mensaje de EsquemaCambiadoError que el propio
+`verificar_esquema()` genero al detectar el desajuste con la v2
+(que asumia mal tanto el delimitador como los nombres de columna):
 
-PATRON DE ACCESO -- distinto al de antes: en vez de consultar
-variable por variable (como hacia el viejo mirror de Socrata), este
-portal entrega un ZIP completo por DIMENSION (ej. toda la dimension
-"Demografia y poblacion" en un solo archivo TXT), no por variable
-individual. El adaptador descarga el ZIP de la dimension relevante,
-lo descomprime en memoria, y filtra las filas a las variables que
-necesita. Cachea por dimension dentro de una misma corrida para no
-descargar el mismo ZIP de varios MB mas de una vez.
+    Código Departamento | Departamento | Código Entidad | Entidad |
+    Dimensión | Subcategoría | Indicador | Dato Numérico |
+    Dato Cualitativo | Año | Mes | Fuente | Unidad de Medida
 
-Dimensiones relevantes (confirmado via
-GET /tdtservice/FITService.svc/rest/busqueda/dimensiones):
-  - Dimension 2: "Demografía y población" -> densidad_poblacional
-  - Dimension 3: "Vivienda y acceso a servicios públicos" -> deficit
-    habitacional, coberturas, tenencia informal (a confirmar)
+Correcciones sobre la v2:
+  - Delimitador real: "|" (pipe), NO ";" -- por eso la v2 nunca
+    lograba separar columnas, tomaba el encabezado completo como una
+    sola columna gigante.
+  - La columna de nombre de indicador se llama "Indicador", no
+    "Variable".
+  - El valor numerico esta en "Dato Numérico", no en "Dato" (existe
+    tambien "Dato Cualitativo" para indicadores no numericos, que no
+    nos interesa aqui).
+  - "Entidad", "Código Entidad" y "Año" SI estaban bien nombrados en
+    la v2 -- esos tres se mantienen igual.
 
->>> IMPORTANTE, LEER ANTES DE CONFIAR EN LOS RESULTADOS <<<
-Se confirmo que el ZIP es descargable de verdad, pero NO se pudo abrir
-su contenido desde este entorno (no hay libreria de unzip en el
-navegador para inspeccionarlo ahi, y este entorno de desarrollo no
-tiene red hacia terridata.dnp.gov.co). Los nombres de columna
-("Variable", "Año", "Dato", "Entidad", "Código Entidad") y el
-delimitador (";") asumidos en el codigo de abajo son la mejor
-suposicion basada en el patron tipico de exports TXT del DNP, NO estan
-confirmados. Usar `obtener_muestra()` en la VPS antes de confiar en
-los resultados, y ajustar los nombres de columna en `fetch()` si no
-coinciden.
+Mismo patron de acceso que v2 (sin cambios): un ZIP completo por
+dimension, via la API REST real de terridata.dnp.gov.co (confirmada
+en vivo con navegador real, ver terridata_adapter.py version anterior
+para el detalle de esa investigacion).
 """
 import io
 import logging
@@ -51,20 +41,24 @@ logger = logging.getLogger(__name__)
 
 DIMENSIONES_URL = "https://terridata.dnp.gov.co/tdtservice/FITService.svc/rest//busqueda/dimensiones"
 
-COLUMNAS_ESPERADAS = {"Entidad", "Variable", "Año", "Dato"}
+# Confirmado real -- no incluye TODAS las columnas del archivo (hay mas:
+# Código Departamento, Departamento, Dimensión, Subcategoría, Mes,
+# Fuente, Unidad de Medida), solo las que este adaptador usa.
+COLUMNAS_ESPERADAS = {"Entidad", "Código Entidad", "Indicador", "Año", "Dato Numérico"}
 
-# Mapeo: nombre interno -> codigo de dimension (CONFIRMADO, via la API
-# de dimensiones real) + nombre de variable dentro del TXT (SIN
-# confirmar -- ver aviso arriba).
 MAPEO_DIMENSIONES = {
-    "densidad_poblacional": {"dimension": "2", "variable_txt": "Densidad poblacional"},
-    "deficit_habitacional_cuantitativo": {"dimension": "3", "variable_txt": "Déficit cuantitativo de vivienda"},
-    "deficit_habitacional_cualitativo": {"dimension": "3", "variable_txt": "Déficit cualitativo de vivienda"},
-    "cobertura_acueducto": {"dimension": "3", "variable_txt": "Cobertura de acueducto"},
-    "cobertura_alcantarillado": {"dimension": "3", "variable_txt": "Cobertura de alcantarillado"},
-    # Sin confirmar si esta dimension SI tiene esta variable -- ver la
-    # investigacion anterior sobre "posesion sin titulo" en el CNPV.
-    "tenencia_informal_terrenos": {"dimension": "3", "variable_txt": "Tenencia informal de terrenos"},
+    "densidad_poblacional": {"dimension": "2", "indicador": "Densidad poblacional"},
+    "deficit_habitacional_cuantitativo": {"dimension": "3", "indicador": "Déficit cuantitativo de vivienda"},
+    "deficit_habitacional_cualitativo": {"dimension": "3", "indicador": "Déficit cualitativo de vivienda"},
+    "cobertura_acueducto": {"dimension": "3", "indicador": "Cobertura de acueducto"},
+    "cobertura_alcantarillado": {"dimension": "3", "indicador": "Cobertura de alcantarillado"},
+    # Nombre exacto del "Indicador" dentro de la dimension 3 sin
+    # confirmar todavia -- el esquema (columnas) ya esta confirmado,
+    # pero el VALOR exacto de este texto en la columna "Indicador"
+    # sigue siendo la mejor suposicion. Si `fetch()` devuelve 0
+    # registros para esta variable pero las demas de la dimension 3 si
+    # traen datos, es este texto el que hay que ajustar.
+    "tenencia_informal_terrenos": {"dimension": "3", "indicador": "Tenencia informal de terrenos"},
 }
 
 
@@ -73,7 +67,6 @@ class TerriDataAdapter(DataSourceAdapter):
     disponible = True
 
     def __init__(self, timeout: float = 60.0):
-        # Timeout mas alto que las otras fuentes -- los ZIP pesan varios MB.
         self._timeout = timeout
         self._cache_dimensiones: dict[str, list[dict]] = {}
 
@@ -87,9 +80,6 @@ class TerriDataAdapter(DataSourceAdapter):
         return info["EnlacePlano"]
 
     def _descargar_dimension(self, codigo_dimension: str) -> list[dict]:
-        """Descarga y descomprime el TXT completo de una dimension,
-        devuelve una lista de dicts (una por fila). Cachea por dimension
-        dentro de esta instancia."""
         if codigo_dimension in self._cache_dimensiones:
             return self._cache_dimensiones[codigo_dimension]
 
@@ -99,14 +89,9 @@ class TerriDataAdapter(DataSourceAdapter):
             zip_resp.raise_for_status()
 
         with zipfile.ZipFile(io.BytesIO(zip_resp.content)) as zf:
-            nombre_archivo = zf.namelist()[0]  # se asume 1 solo archivo TXT dentro del ZIP
+            nombre_archivo = zf.namelist()[0]
             contenido_bytes = zf.read(nombre_archivo)
 
-        # Encoding sin confirmar en la fuente real -- se prueba utf-8
-        # primero (mas comun en exports modernos), con latin-1 como
-        # respaldo (tipico en TXT viejos del gobierno colombiano). Si
-        # ninguno decodifica limpio, usar utf-8 con reemplazo de
-        # caracteres invalidos en vez de fallar toda la descarga.
         try:
             contenido = contenido_bytes.decode("utf-8")
         except UnicodeDecodeError:
@@ -121,11 +106,10 @@ class TerriDataAdapter(DataSourceAdapter):
             self._cache_dimensiones[codigo_dimension] = []
             return []
 
-        # Delimitador sin confirmar -- ";" es lo tipico en TXT gov CO
-        # (para no chocar con comas decimales), verificar en la VPS.
-        encabezados = lineas[0].split(";")
+        # Delimitador CONFIRMADO real: "|" (no ";", ver aviso del modulo).
+        encabezados = lineas[0].split("|")
         for linea in lineas[1:]:
-            valores = linea.split(";")
+            valores = linea.split("|")
             if len(valores) != len(encabezados):
                 continue
             filas.append(dict(zip(encabezados, valores)))
@@ -137,10 +121,6 @@ class TerriDataAdapter(DataSourceAdapter):
         return filas
 
     def obtener_muestra(self, codigo_dimension: str = "2", limite: int = 5) -> list[dict]:
-        """Descarga una dimension completa y devuelve las primeras filas
-        -- para confirmar en la VPS los nombres reales de columna y el
-        delimitador/encoding real (ver el aviso al inicio del modulo).
-        Por defecto usa la dimension 2 (Demografia y poblacion)."""
         filas = self._descargar_dimension(codigo_dimension)
         return filas[:limite]
 
@@ -155,19 +135,17 @@ class TerriDataAdapter(DataSourceAdapter):
             filas = self._descargar_dimension(info["dimension"])
 
             for fila in filas:
-                # Nombres de columna sin confirmar -- ajustar tras ver
-                # obtener_muestra() en la VPS real.
-                if fila.get("Variable") != info["variable_txt"]:
+                if fila.get("Indicador") != info["indicador"]:
                     continue
-                anio_fila = fila.get("Año", fila.get("Ano", ""))
+                anio_fila = fila.get("Año", "")
                 if anio is not None and str(anio_fila) != str(anio):
                     continue
                 try:
                     records.append(IndicadorRecord(
-                        codigo_divipola=fila.get("Código Entidad", fila.get("Codigo Entidad", "")).strip(),
+                        codigo_divipola=fila.get("Código Entidad", "").strip(),
                         entidad_territorial=fila.get("Entidad", "").strip(),
                         variable=var_interna,
-                        valor=float(str(fila.get("Dato", "nan")).replace(",", ".")),
+                        valor=float(str(fila.get("Dato Numérico", "nan")).replace(",", ".")),
                         anio=int(anio_fila) if anio_fila else 0,
                         fuente=self.nombre,
                     ))
