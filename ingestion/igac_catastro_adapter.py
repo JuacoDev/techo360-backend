@@ -52,16 +52,25 @@ class IGACCatastroAdapter(DataSourceAdapter):
     def __init__(self, timeout: float = 30.0):
         self._timeout = timeout
 
-    def _conteos_por_municipio(self, client: httpx.Client, condicion: str | None = None) -> dict[str, int]:
+    def _conteos_por_municipio(self, client: httpx.Client, condicion: str | None = None) -> dict[str, tuple[str, int]]:
         """UNA sola consulta agregada que devuelve el conteo de TODOS
-        los municipios de una vez (confirmado en vivo: 302 municipios
-        en una sola respuesta) -- nunca se itera municipio por
-        municipio, eso hubiera sido ~2.400 peticiones HTTP para todo
-        el pais en vez de 2."""
+        los municipios de una vez (confirmado en vivo: cientos de
+        municipios en una sola respuesta) -- nunca se itera municipio
+        por municipio, eso hubiera sido ~2.400 peticiones HTTP para
+        todo el pais en vez de 2.
+
+        Se agrupa por cod_divipola Y municipio a la vez (confirmado en
+        vivo que ArcGIS soporta agrupar por 2 campos) -- esto evita
+        necesitar una tabla de resolucion de nombres aparte, ya que
+        capa_ladm_predio ya trae el nombre del municipio como campo
+        propio, no solo el codigo.
+
+        Devuelve {cod_divipola: (nombre_municipio, conteo)}.
+        """
         where = f"condicion_predio='{condicion}'" if condicion is not None else "1=1"
         params = {
             "where": where,
-            "groupByFieldsForStatistics": "cod_divipola",
+            "groupByFieldsForStatistics": "cod_divipola,municipio",
             "outStatistics": (
                 '[{"statisticType":"count","onStatisticField":"objectid",'
                 '"outStatisticFieldName":"total"}]'
@@ -76,7 +85,10 @@ class IGACCatastroAdapter(DataSourceAdapter):
         if data.get("error"):
             raise RuntimeError(f"Error del servidor IGAC: {data['error']}")
 
-        return {f["attributes"]["cod_divipola"]: f["attributes"]["total"] for f in data.get("features", [])}
+        return {
+            f["attributes"]["cod_divipola"]: (f["attributes"]["municipio"], f["attributes"]["total"])
+            for f in data.get("features", [])
+        }
 
     def calcular_para_municipio(self, codigo_divipola: str) -> float | None:
         """Porcentaje de tenencia informal para UN solo municipio -- para
@@ -88,10 +100,11 @@ class IGACCatastroAdapter(DataSourceAdapter):
             totales = self._conteos_por_municipio(client)
             informales = self._conteos_por_municipio(client, condicion="Informal")
 
-        total = totales.get(codigo_divipola)
-        if not total:
+        entrada_total = totales.get(codigo_divipola)
+        if not entrada_total or not entrada_total[1]:
             return None
-        cantidad_informal = informales.get(codigo_divipola, 0)
+        _, total = entrada_total
+        _, cantidad_informal = informales.get(codigo_divipola, ("", 0))
         return round((cantidad_informal / total) * 100, 2)
 
     def fetch(self, variables: list[str], anio: int | None = None) -> list[IndicadorRecord]:
@@ -103,14 +116,17 @@ class IGACCatastroAdapter(DataSourceAdapter):
             informales = self._conteos_por_municipio(client, condicion="Informal")
 
         records: list[IndicadorRecord] = []
-        for cod_divipola, total in totales.items():
+        for cod_divipola, (nombre_municipio, total) in totales.items():
             if total == 0:
                 continue
-            cantidad_informal = informales.get(cod_divipola, 0)
+            # informales.get(...) puede no tener este codigo si el
+            # municipio no tiene NINGUN predio informal -- eso es
+            # legitimo (0%), no un error.
+            _, cantidad_informal = informales.get(cod_divipola, (nombre_municipio, 0))
             porcentaje = round((cantidad_informal / total) * 100, 2)
             records.append(IndicadorRecord(
                 codigo_divipola=cod_divipola,
-                entidad_territorial="",  # esta fuente no da el nombre, solo el codigo -- se resuelve despues via la tabla de zonas existente
+                entidad_territorial=nombre_municipio.title(),  # viene en MAYUSCULAS del servidor, se normaliza
                 variable="tenencia_informal_terrenos",
                 valor=porcentaje,
                 anio=anio or 0,
