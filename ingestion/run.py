@@ -13,6 +13,7 @@ from typing import Callable
 from ingestion.base import DataSourceUnavailableError, GeometryRecord, IndicadorRecord
 from ingestion.db import guardar_indicador, reemplazar_vias
 from ingestion.fna_adapter import FNAAdapter
+from ingestion.igac_catastro_adapter import IGACCatastroAdapter
 from ingestion.terridata_adapter import TerriDataAdapter
 from ingestion.validacion import ValidacionError, validar_indicador
 from ingestion.validacion_esquema import EsquemaCambiadoError, verificar_esquema
@@ -28,7 +29,12 @@ PLAN_DE_VARIABLES_INDICADOR = {
     "densidad_poblacional": TerriDataAdapter,
     "cobertura_acueducto": TerriDataAdapter,
     "cobertura_alcantarillado": TerriDataAdapter,
-    "tenencia_informal_terrenos": TerriDataAdapter,
+    # tenencia_informal_terrenos: IGAC Catastro, no TerriData -- se
+    # confirmo con 15+ busquedas que TerriData/CNPV no exponen este
+    # dato. IGAC si lo tiene, directo, via condicion_predio='Informal'.
+    # Nota: mide PREDIOS, no hogares (decision consciente del equipo,
+    # ver docstring de igac_catastro_adapter.py).
+    "tenencia_informal_terrenos": IGACCatastroAdapter,
     "cercania_constructoras_vis": FNAAdapter,
 }
 

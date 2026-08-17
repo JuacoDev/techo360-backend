@@ -45,12 +45,25 @@ DIMENSIONES_URL = "https://terridata.dnp.gov.co/tdtservice/FITService.svc/rest//
 COLUMNAS_ESPERADAS = {"Entidad", "Código Entidad", "Indicador", "Año", "Dato Numérico"}
 
 MAPEO_DIMENSIONES = {
-    "densidad_poblacional": {"dimension": "2", "indicador": "Densidad poblacional"},
+    # Confirmado real via buscar_indicadores('1', 'densidad') -- vive en
+    # dimension 1 ("Descripcion general"), no en la 2 como se supuso
+    # originalmente (el nombre del indicador si era correcto desde el
+    # principio, solo la dimension estaba mal).
+    "densidad_poblacional": {"dimension": "1", "indicador": "Densidad poblacional"},
     "deficit_habitacional_cuantitativo": {"dimension": "3", "indicador": "Déficit cuantitativo de vivienda"},
     "deficit_habitacional_cualitativo": {"dimension": "3", "indicador": "Déficit cualitativo de vivienda"},
-    "cobertura_acueducto": {"dimension": "3", "indicador": "Cobertura de acueducto"},
-    "cobertura_alcantarillado": {"dimension": "3", "indicador": "Cobertura de alcantarillado"},
-    "tenencia_informal_terrenos": {"dimension": "3", "indicador": "Tenencia informal de terrenos"},
+    "cobertura_acueducto": {"dimension": "3", "indicador": "Cobertura de acueducto (REC)"},
+    "cobertura_alcantarillado": {"dimension": "3", "indicador": "Cobertura de alcantarillado (REC)"},
+    # Se eligio la variante "(REC)" (Registro Estadistico de Cobertura,
+    # actualizacion mas frecuente) en vez de "(Censo)" (solo se
+    # actualiza cada varios años) -- confirmado real via
+    # buscar_indicadores('3', 'acueducto'/'alcantarillado'), que tambien
+    # encontro variantes rural/urbana separadas que no se usan aqui
+    # (se prefiere el dato general del municipio).
+    # "tenencia_informal_terrenos" se movio a igac_catastro_adapter.py
+    # -- se confirmo con 15+ busquedas (aqui y en el Geovisor CNPV del
+    # DANE) que este dato no esta expuesto en TerriData bajo ningun
+    # nombre razonable de "Indicador".
 }
 
 
