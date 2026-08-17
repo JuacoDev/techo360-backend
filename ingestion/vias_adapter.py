@@ -46,7 +46,11 @@ class ViasAdapter(DataSourceAdapter):
     nombre = "Vias (INVIAS/OSM)"
     disponible = True
 
-    def __init__(self, timeout: float = 30.0):
+    def __init__(self, timeout: float = 120.0):
+        # 120s (no 30s) a proposito: el respaldo a OSM/Overpass pide la
+        # red vial de TODO el pais de una sola consulta (bbox de
+        # Colombia completa) -- confirmado en produccion que 30s no
+        # alcanza para eso, dio timeout real.
         self._timeout = timeout
 
     def obtener_muestra_invias(self, limite: int = 5) -> list[dict]:
@@ -100,7 +104,7 @@ class ViasAdapter(DataSourceAdapter):
         HTTP_HEADERS compartido del resto del pipeline."""
         sur, oeste, norte, este = bbox
         query = f"""
-        [out:json][timeout:25];
+        [out:json][timeout:100];
         way["highway"]({sur},{oeste},{norte},{este});
         out geom;
         """

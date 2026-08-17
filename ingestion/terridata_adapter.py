@@ -149,6 +149,22 @@ class TerriDataAdapter(DataSourceAdapter):
                 break
         return muestra
 
+    def buscar_indicadores(self, codigo_dimension: str, palabra_clave: str) -> list[str]:
+        """Recorre una dimension completa y devuelve el conjunto de
+        valores UNICOS de la columna 'Indicador' que contengan la
+        palabra clave dada (insensible a mayusculas). Sirve para
+        encontrar el nombre EXACTO de un indicador sin tener que
+        adivinarlo -- el mismo problema que ya tuvimos antes con
+        TerriData v1, resuelto aqui de la misma manera: buscar en
+        vivo en vez de suponer."""
+        palabra_clave_normalizada = palabra_clave.lower()
+        encontrados = set()
+        for fila in self._iterar_filas_dimension(codigo_dimension):
+            indicador = fila.get("Indicador", "")
+            if palabra_clave_normalizada in indicador.lower():
+                encontrados.add(indicador)
+        return sorted(encontrados)
+
     def fetch(self, variables: list[str], anio: int | None = None) -> list[IndicadorRecord]:
         records: list[IndicadorRecord] = []
 
