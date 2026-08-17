@@ -7,6 +7,7 @@
 #
 # from db.session import Base
 # from sqlalchemy import Column, Integer, String
+#from models.zona import Zona
 #
 # class Vivienda(Base):
 #     __tablename__ = "viviendas"
