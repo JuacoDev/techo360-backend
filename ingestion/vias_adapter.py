@@ -71,6 +71,24 @@ class ViasAdapter(DataSourceAdapter):
             params = {"where": "1=1", "outFields": "*", "f": "geojson", "resultRecordCount": 2000}
             response = client.get(INVIAS_FEATURE_SERVER_URL, params=params)
             response.raise_for_status()
+
+            # ArcGIS a veces responde 200 con una pagina HTML de error
+            # ("ArcGIS Web Adaptor -- Could not access any GIS Server
+            # machines") en vez de un error HTTP real -- confirmado en
+            # produccion. raise_for_status() no detecta esto (el status
+            # SI es 200), asi que se valida el content-type antes de
+            # intentar parsear como JSON, para dar un error claro en
+            # vez de un JSONDecodeError confuso.
+            content_type = response.headers.get("content-type", "")
+            if "json" not in content_type:
+                raise RuntimeError(
+                    f"INVIAS respondio 200 pero con contenido no-JSON "
+                    f"(content-type: {content_type or 'desconocido'}) -- "
+                    f"probablemente el Web Adaptor esta arriba pero los "
+                    f"servidores GIS reales detras de el estan caidos "
+                    f"(confirmado este mensaje exacto en produccion)."
+                )
+
             data = response.json()
 
         records = []
