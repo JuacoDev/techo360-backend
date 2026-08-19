@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 
-from routers import email, health, otp, zonas, usuarios
+from routers import email, health, otp, zonas, usuarios, auth
 
 app = FastAPI(
     title="Techo 360 - Backend",
@@ -13,3 +13,4 @@ app.include_router(email.router)
 app.include_router(otp.router)
 app.include_router(zonas.router)
 app.include_router(usuarios.router)
+app.include_router(auth.router)

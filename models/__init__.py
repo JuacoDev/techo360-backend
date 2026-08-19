@@ -8,7 +8,7 @@
 # from db.session import Base
 # from sqlalchemy import Column, Integer, String
 #from models.zona import Zona
-#
+#from models.mapcalor_user import MapCalorUser
 # class Vivienda(Base):
 #     __tablename__ = "viviendas"
 #     id = Column(Integer, primary_key=True)

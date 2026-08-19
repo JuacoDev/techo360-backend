@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     brevo_api_key: str
     brevo_sender_email: str = "juan.tellez@upb.edu.co"
     brevo_sender_name: str = "Techo 360"
+    jwt_secret_key: str
 
     class Config:
         env_file = ".env"
