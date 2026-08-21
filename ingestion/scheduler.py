@@ -45,17 +45,27 @@ logger = logging.getLogger(__name__)
 # mas seguido de lo necesario solo gasta CPU sin ningun beneficio real.
 CRON_SEMANAL = {"day_of_week": "mon", "hour": 3, "minute": 0}  # lunes 3am, hora de bajo trafico
 
+# Trimestral -- los limites administrativos (departamentos/municipios)
+# practicamente no cambian, no tiene sentido correrlo semanal. 1ro de
+# enero/abril/julio/octubre a las 4am (una hora despues del job semanal,
+# para no competir por CPU/red si algun trimestre coinciden el mismo dia).
+CRON_TRIMESTRAL = {"month": "1,4,7,10", "day": 1, "hour": 4, "minute": 0}
 
-async def _ya_corrio_hoy(redis_client) -> bool:
+
+async def _ya_corrio_hoy(redis_client, clave_base: str = "pipeline_datos") -> bool:
     """Guardia contra doble ejecucion. El backend se reinicia seguido
     con cada deploy del CI/CD -- sin esto, un reinicio a media tarde
-    podria disparar el pipeline dos veces el mismo dia."""
-    clave = f"pipeline_datos:ultima_corrida:{date.today().isoformat()}"
+    podria disparar el pipeline dos veces el mismo dia.
+
+    `clave_base` namespacea la guardia por job -- cada job programado
+    (indicadores, zonas) tiene su propia clave en Redis, para que uno
+    no pise el "ya corrio hoy" del otro."""
+    clave = f"{clave_base}:ultima_corrida:{date.today().isoformat()}"
     return await redis_client.exists(clave) == 1
 
 
-async def _marcar_corrida_de_hoy(redis_client):
-    clave = f"pipeline_datos:ultima_corrida:{date.today().isoformat()}"
+async def _marcar_corrida_de_hoy(redis_client, clave_base: str = "pipeline_datos"):
+    clave = f"{clave_base}:ultima_corrida:{date.today().isoformat()}"
     await redis_client.set(clave, "1", ex=26 * 60 * 60)  # 26h, mismo patron que el resto del proyecto
 
 
@@ -86,6 +96,27 @@ async def _job_pipeline(redis_client, database_url: str, notificar_admin):
     )
 
 
+async def _job_zonas(redis_client, database_url: str, notificar_admin):
+    """Mismo patron que _job_pipeline (guardia + thread aparte), pero con
+    su propia clave de Redis (namespace "zonas_igac") -- independiente
+    del job semanal de indicadores, para que no compartan el "ya corrio
+    hoy" de un job que no tiene nada que ver con el otro."""
+    if await _ya_corrio_hoy(redis_client, clave_base="zonas_igac"):
+        logger.info("La sincronizacion de zonas ya corrio hoy, se omite esta ejecucion.")
+        return
+
+    logger.info("Iniciando corrida programada de sincronizacion de zonas (IGAC)...")
+    from ingestion.zonas_igac_adapter import sincronizar_zonas  # import diferido, mismo motivo que arriba
+
+    await _marcar_corrida_de_hoy(redis_client, clave_base="zonas_igac")
+
+    await asyncio.to_thread(
+        sincronizar_zonas,
+        database_url=database_url,
+        notificar_admin=notificar_admin,
+    )
+
+
 def iniciar_scheduler(redis_client, database_url: str, notificar_admin=None) -> AsyncIOScheduler:
     """AsyncIOScheduler (no BackgroundScheduler) a proposito: corre en el
     mismo event loop que ya usa FastAPI, sin abrir threads/procesos
@@ -100,8 +131,19 @@ def iniciar_scheduler(redis_client, database_url: str, notificar_admin=None) -> 
         replace_existing=True,
         **CRON_SEMANAL,
     )
+    scheduler.add_job(
+        _job_zonas,
+        trigger="cron",
+        args=[redis_client, database_url, notificar_admin],
+        id="zonas_igac_trimestral",
+        replace_existing=True,
+        **CRON_TRIMESTRAL,
+    )
     scheduler.start()
-    logger.info(f"Scheduler del pipeline de datos iniciado (corre {CRON_SEMANAL}).")
+    logger.info(
+        f"Scheduler del pipeline de datos iniciado "
+        f"(indicadores: {CRON_SEMANAL}, zonas IGAC: {CRON_TRIMESTRAL})."
+    )
     return scheduler
 
 
