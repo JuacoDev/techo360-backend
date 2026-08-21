@@ -64,6 +64,21 @@ convencion, ej. "68001" -> "68" = Santander -- verificado contra los
 nombre, todos coinciden). "Depto" se guarda solo para log/depuracion,
 no se usa para el FK.
 
+>>> CORRECCION IMPORTANTE, encontrada en la primera corrida real
+>>> contra produccion (no en pruebas): Bogota D.C. (MpCodigo "11001")
+>>> SI aparece en la capa de municipios, pero el departamento "11" NO
+>>> aparece en la capa de departamentos del IGAC (administrativamente
+>>> es un Distrito Capital, sin poligono propio en esa capa especifica)
+>>> -- esto violaba el FK de zonas_municipio y dejaba a los 1105
+>>> municipios sin guardar de un solo saque (0 guardados, error de FK).
+>>> Se resolvio derivando sinteticamente cualquier codigo_departamento
+>>> que los municipios usen pero que la capa de departamentos no traiga
+>>> (ver agrupar_municipios_sin_departamento/guardar_departamentos_derivados
+>>> mas abajo) -- el poligono derivado es la union de los municipios de
+>>> ese grupo, y el nombre queda marcado explicitamente como "derivado"
+>>> para no confundirlo con un poligono oficial de la capa de
+>>> departamentos.
+
 Simplificacion geometrica: se hace en SQL (ST_SimplifyPreserveTopology,
 no ST_Simplify a secas -- evita huecos entre municipios vecinos al
 simplificar cada poligono por separado), no en Python -- por eso este
@@ -305,6 +320,69 @@ def _upsert_municipio(cur, codigo: str, codigo_departamento: str, nombre: str, g
     )
 
 
+def codigos_departamento_reales(departamentos: list[dict]) -> set[str]:
+    return {str(f["properties"]["DeCodigo"]).strip().zfill(2) for f in departamentos}
+
+
+def agrupar_municipios_sin_departamento(municipios: list[dict], codigos_reales: set[str]) -> dict[str, list[dict]]:
+    """Municipios cuyo codigo_departamento (derivado de MpCodigo, ver
+    guardar_municipios) no aparece en la capa de departamentos del IGAC.
+
+    Caso real confirmado en la primera corrida contra produccion: Bogota
+    D.C. (MpCodigo '11001' -> depto '11') SI existe en la capa de
+    municipios, pero NO tiene poligono propio en la capa de
+    departamentos (administrativamente es un Distrito Capital, no un
+    departamento con limite propio en esa capa) -- eso violaba el FK de
+    zonas_municipio y dejaba 0 municipios guardados de los 1105. Se
+    agrupan aqui (no hardcodeado a "11" especificamente, por si hay otro
+    caso similar) para poder derivar un poligono sintetico en vez de
+    fallar el FK o perder el municipio."""
+    grupos: dict[str, list[dict]] = {}
+    for f in municipios:
+        codigo = str(f["properties"]["MpCodigo"]).strip().zfill(5)[:2]
+        if codigo not in codigos_reales:
+            grupos.setdefault(codigo, []).append(f)
+    return grupos
+
+
+def guardar_departamentos_derivados(database_url: str, grupos: dict[str, list[dict]]) -> int:
+    """Para codigos de departamento que los municipios SI usan pero que
+    la capa de departamentos del IGAC no trae (ver
+    agrupar_municipios_sin_departamento) -- inserta un poligono
+    sintetico, union de los municipios de ese grupo (ST_Union
+    incremental, no necesita cargar nada de geometria en Python). El
+    nombre queda marcado explicitamente como derivado, para no
+    confundirlo con datos oficiales de la capa de departamentos."""
+    if not grupos:
+        return 0
+    conn = _conectar(database_url)
+    try:
+        with conn, conn.cursor() as cur:
+            for codigo, features in grupos.items():
+                primero, *resto = features
+                nombre_base = str(primero["properties"].get("MpNombre", codigo)).strip().title()
+                nombre = f"{nombre_base} (derivado de municipios -- sin poligono propio en la capa de departamentos del IGAC)"
+                _upsert_departamento(cur, codigo, nombre, primero["geometry"])
+                for f in resto:
+                    cur.execute(
+                        """
+                        UPDATE zonas_departamento
+                        SET geom = ST_Multi(ST_Union(geom, ST_SetSRID(ST_GeomFromGeoJSON(%s), 4326))),
+                            actualizado_en = now()
+                        WHERE codigo_departamento = %s
+                        """,
+                        (json.dumps(f["geometry"]), codigo),
+                    )
+                logger.warning(
+                    f"Departamento '{codigo}' derivado de {len(features)} municipio(s) "
+                    f"(ausente en la capa de departamentos del IGAC): {nombre}"
+                )
+        logger.info(f"Departamentos derivados guardados: {len(grupos)}")
+        return len(grupos)
+    finally:
+        conn.close()
+
+
 def guardar_departamentos(database_url: str, features: list[dict]) -> int:
     conn = _conectar(database_url)
     try:
@@ -365,22 +443,33 @@ def sincronizar_zonas(
     try:
         crear_tablas_zonas(database_url)
 
+        # Se descargan las DOS capas ANTES de guardar cualquiera (no se
+        # guardan departamentos primero como en la version anterior) --
+        # hace falta tener los municipios en mano para saber si algun
+        # codigo_departamento que ellos usan no vino en la capa de
+        # departamentos (ver agrupar_municipios_sin_departamento, caso
+        # real confirmado: Bogota D.C.), y derivarlo ANTES del insert de
+        # municipios -- si no, el FK revienta y no se guarda nada.
         with httpx.Client(timeout=adapter._timeout, headers=HTTP_HEADERS) as client:
             logger.info("Descargando departamentos del IGAC...")
             departamentos = adapter.descargar_departamentos(client)
             logger.info(f"Departamentos obtenidos: {len(departamentos)}")
-
-        # Los departamentos se guardan ANTES de descargar municipios (no
-        # solo antes de guardarlos) -- zonas_municipio tiene un FK hacia
-        # zonas_departamento, asi que si esto falla no tiene sentido ni
-        # gastar tiempo bajando los ~1105 municipios que no se podrian guardar.
-        resultado["departamentos"] = guardar_departamentos(database_url, departamentos)
 
         with httpx.Client(timeout=adapter._timeout, headers=HTTP_HEADERS) as client:
             logger.info("Descargando municipios del IGAC (esto tarda varios minutos)...")
             municipios = adapter.descargar_municipios(client)
             logger.info(f"Municipios obtenidos: {len(municipios)}")
 
+        codigos_reales = codigos_departamento_reales(departamentos)
+        grupos_derivados = agrupar_municipios_sin_departamento(municipios, codigos_reales)
+        if grupos_derivados:
+            logger.warning(
+                f"Codigos de departamento usados por municipios pero ausentes en la capa "
+                f"de departamentos del IGAC: {sorted(grupos_derivados)} -- se derivan sinteticamente."
+            )
+
+        resultado["departamentos"] = guardar_departamentos(database_url, departamentos)
+        resultado["departamentos"] += guardar_departamentos_derivados(database_url, grupos_derivados)
         resultado["municipios"] = guardar_municipios(database_url, municipios)
 
         logger.info(
