@@ -7,3 +7,4 @@ httpx
 redis
 pydantic[email]
 PyJWT
+geoalchemy2

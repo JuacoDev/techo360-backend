@@ -10,3 +10,6 @@ class ZonaResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+        from pydantic import BaseModel
+
