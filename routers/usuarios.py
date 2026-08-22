@@ -4,8 +4,8 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from db.session import get_db
-from models.zona import Usuario
-from schemas.zona import UsuarioResponse
+from models.usuario import Usuario
+from schemas.usuario import UsuarioResponse
 
 
 router = APIRouter(
