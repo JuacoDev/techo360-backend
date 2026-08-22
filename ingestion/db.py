@@ -84,6 +84,27 @@ def guardar_indicador(database_url: str, record: IndicadorRecord) -> str:
         conn.close()
 
 
+def contar_distintos_por_variable_anio(database_url: str, variable: str, anio: int) -> tuple[int, int]:
+    """Devuelve (total_filas, municipios_distintos) para una variable+año
+    ya guardados en MapCalorDB. Existe especificamente para poder
+    verificar backfills historicos desde la propia terminal sin entrar a
+    psql -- si total_filas y municipios_distintos difieren mucho (ej. 17
+    años cargados pero "distintos" clavado en 1), es la misma clase de
+    bug real que ya paso una vez (un campo vacio/mal derivado colapsando
+    cientos de municipios en la misma llave unica de MapCalorDB)."""
+    conn = _conectar(database_url)
+    try:
+        with conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT COUNT(*), COUNT(DISTINCT municipios) FROM MapCalorDB WHERE nameVar = %s AND yearM = %s",
+                (variable, anio),
+            )
+            total, distintos = cur.fetchone()
+            return total, distintos
+    finally:
+        conn.close()
+
+
 def reemplazar_vias(database_url: str, registros: list[GeometryRecord]) -> int:
     """Snapshot completo: borra todas las vias existentes y vuelve a
     insertar todas las nuevas, dentro de una sola transaccion (si algo
