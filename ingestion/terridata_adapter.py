@@ -44,6 +44,23 @@ DIMENSIONES_URL = "https://terridata.dnp.gov.co/tdtservice/FITService.svc/rest//
 
 COLUMNAS_ESPERADAS = {"Entidad", "Código Entidad", "Indicador", "Año", "Dato Numérico"}
 
+def _es_agregado_departamental(codigo_entidad: str) -> bool:
+    """True si el 'Codigo Entidad' es el TOTAL de un departamento (formato
+    DIVIPOLA departamento+'000', ej. Antioquia=05000, Boyaca=15000,
+    Meta=50000), no un municipio real -- confirmado en vivo contra la
+    fuente: TerriData incluye una fila de este tipo por cada uno de los 33
+    departamentos, mezclada con las filas de municipio en el mismo
+    archivo, para los 3 indicadores del panel de entrenamiento.
+
+    Bogota D.C. no necesita un caso especial aqui a pesar de ser a la vez
+    departamento y municipio: su unico codigo real es '11001' (el mismo
+    que usa como municipio) -- nunca genera una fila '11000' separada,
+    confirmado en vivo. Como '11001' no termina en '000', ya queda fuera
+    de este filtro sin necesidad de excluirlo a mano."""
+    codigo = (codigo_entidad or "").strip()
+    return len(codigo) == 5 and codigo.endswith("000")
+
+
 MAPEO_DIMENSIONES = {
     # Confirmado real via buscar_indicadores('1', 'densidad') -- vive en
     # dimension 1 ("Descripcion general"), no en la 2 como se supuso
@@ -186,22 +203,38 @@ class TerriDataAdapter(DataSourceAdapter):
             if info is None:
                 raise ValueError(f"'{var_interna}' no esta mapeada en MAPEO_DIMENSIONES.")
 
+            agregados_departamentales_excluidos = 0
+            registros_var = 0
             for fila in self._iterar_filas_dimension(info["dimension"]):
                 if fila.get("Indicador") != info["indicador"]:
                     continue
                 anio_fila = fila.get("Año", "")
                 if anio is not None and str(anio_fila) != str(anio):
                     continue
+
+                codigo = fila.get("Código Entidad", "").strip()
+                if _es_agregado_departamental(codigo):
+                    agregados_departamentales_excluidos += 1
+                    continue
+
                 try:
                     records.append(IndicadorRecord(
-                        codigo_divipola=fila.get("Código Entidad", "").strip(),
+                        codigo_divipola=codigo,
                         entidad_territorial=fila.get("Entidad", "").strip(),
                         variable=var_interna,
                         valor=float(str(fila.get("Dato Numérico", "nan")).replace(",", ".")),
                         anio=int(anio_fila) if anio_fila else 0,
                         fuente=self.nombre,
                     ))
+                    registros_var += 1
                 except (TypeError, ValueError):
                     continue
+
+            if agregados_departamentales_excluidos:
+                logger.info(
+                    f"'{var_interna}': {agregados_departamentales_excluidos} fila(s) excluidas por ser "
+                    f"agregado departamental (Codigo Entidad terminado en '000', no un municipio real) -- "
+                    f"{registros_var} registro(s) de municipio real conservados."
+                )
 
         return records

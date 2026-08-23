@@ -38,6 +38,30 @@ asi que en la base real quedaron como "mapcalordb", "namevar", etc.
 Esto NO requiere ningun ajuste especial aqui: mientras este codigo
 tampoco use comillas dobles al referenciar esos nombres, Postgres
 resuelve la coincidencia igual sin importar como se escriban.
+
+>>> codigoDivipola (agregado despues, ver migrar_columna_codigo_divipola
+>>> mas abajo): MapCalorDB nunca tuvo columna de codigo DIVIPOLA -- solo
+>>> guardaba el nombre de la entidad (record.entidad_territorial),
+>>> descartando record.codigo_divipola por completo. Eso obligaba a
+>>> extraer_panel.py (en techo360-proyeccion) a cruzar contra
+>>> zonas_municipio por NOMBRE normalizado, un cruce fragil confirmado en
+>>> vivo: nombres de TerriData/DANE (ej. "Cali", "Cartagena") no siempre
+>>> coinciden con los nombres oficiales de IGAC (ej. "Santiago De Cali",
+>>> "Cartagena De Indias"), y encima el mismo nombre oficial IGAC puede
+>>> repetirse en dos municipios reales distintos (ej. "El Carmen" existe
+>>> en Choco Y en Santander, con codigos distintos) -- un cruce por
+>>> nombre nunca puede distinguir ese caso, solo el codigo puede.
+>>>
+>>> MapCalorDB NO la crea este codigo (la crea Jeremy/DBA en produccion,
+>>> con el trigger BEFORE INSERT ya explicado arriba) -- por eso esto es
+>>> un ALTER TABLE idempotente y explicito
+>>> (migrar_columna_codigo_divipola), no una creacion de tabla, y no se
+>>> corre automaticamente en cada guardado (correr un ALTER TABLE en
+>>> cada llamada a guardar_indicador seria un costo y un riesgo de lock
+>>> innecesario contra una tabla de produccion que este codigo no es
+>>> dueño de crear). Se corre una sola vez, a mano, antes de desplegar
+>>> este cambio -- ver el bloque `if __name__ == "__main__"` al final
+>>> del archivo.
 """
 import logging
 
@@ -55,17 +79,25 @@ def _conectar(database_url: str):
 def guardar_indicador(database_url: str, record: IndicadorRecord) -> str:
     """UPDATE primero, INSERT solo si no existia -- ver el aviso del
     modulo sobre por que NO se usa ON CONFLICT aqui.
-    Devuelve 'actualizado' o 'insertado'."""
+    Devuelve 'actualizado' o 'insertado'.
+
+    Guarda record.codigo_divipola en la columna codigoDivipola (ver aviso
+    del modulo) -- se normaliza "" a NULL (en vez de guardar string
+    vacio) porque no todas las fuentes lo dan (ej. FNA probablemente solo
+    da el nombre, igual que ya contempla validacion.py); NULL es lo que
+    extraer_panel.py espera para decidir cuando usar su fallback por
+    nombre."""
+    codigo_divipola = record.codigo_divipola.strip() if record.codigo_divipola else None
     conn = _conectar(database_url)
     try:
         with conn, conn.cursor() as cur:
             cur.execute(
                 """
                 UPDATE MapCalorDB
-                SET valueVar = %s, originVar = %s
+                SET valueVar = %s, originVar = %s, codigoDivipola = %s
                 WHERE municipios = %s AND nameVar = %s AND yearM = %s
                 """,
-                (record.valor, record.fuente, record.entidad_territorial, record.variable, record.anio),
+                (record.valor, record.fuente, codigo_divipola, record.entidad_territorial, record.variable, record.anio),
             )
             if cur.rowcount > 0:
                 logger.info(f"Actualizado: {record.entidad_territorial} / {record.variable} / {record.anio}")
@@ -73,13 +105,36 @@ def guardar_indicador(database_url: str, record: IndicadorRecord) -> str:
 
             cur.execute(
                 """
-                INSERT INTO MapCalorDB (municipios, nameVar, valueVar, yearM, originVar)
-                VALUES (%s, %s, %s, %s, %s)
+                INSERT INTO MapCalorDB (municipios, nameVar, valueVar, yearM, originVar, codigoDivipola)
+                VALUES (%s, %s, %s, %s, %s, %s)
                 """,
-                (record.entidad_territorial, record.variable, record.valor, record.anio, record.fuente),
+                (record.entidad_territorial, record.variable, record.valor, record.anio, record.fuente, codigo_divipola),
             )
             logger.info(f"Insertado: {record.entidad_territorial} / {record.variable} / {record.anio}")
             return "insertado"
+    finally:
+        conn.close()
+
+
+def migrar_columna_codigo_divipola(database_url: str) -> None:
+    """ALTER TABLE idempotente para agregar codigoDivipola a MapCalorDB --
+    ver el aviso del modulo sobre por que esto NO se corre automaticamente
+    en cada guardar_indicador() y por que las filas ya cargadas antes de
+    este cambio se quedan con codigoDivipola en NULL (no se puede
+    reconstruir el codigo real de forma confiable a partir del nombre ya
+    guardado -- es justamente el cruce fragil por nombre que este cambio
+    busca dejar de necesitar como metodo principal; reconstruirlo bien
+    requeriria volver a correr el backfill historico contra TerriData,
+    fuera del alcance de esta migracion).
+
+    Correr UNA VEZ, a mano, antes de desplegar el resto de este cambio:
+        DATABASE_URL=... python -m ingestion.db
+    """
+    conn = _conectar(database_url)
+    try:
+        with conn, conn.cursor() as cur:
+            cur.execute("ALTER TABLE MapCalorDB ADD COLUMN IF NOT EXISTS codigoDivipola VARCHAR(5)")
+        logger.info("Columna codigoDivipola verificada/agregada en MapCalorDB.")
     finally:
         conn.close()
 
@@ -125,3 +180,19 @@ def reemplazar_vias(database_url: str, registros: list[GeometryRecord]) -> int:
         return len(registros)
     finally:
         conn.close()
+
+
+if __name__ == "__main__":
+    import os
+
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+
+    database_url = os.environ.get("DATABASE_URL")
+    if not database_url:
+        raise SystemExit(
+            "Falta la variable de entorno DATABASE_URL -- correr esto dentro "
+            "del contenedor del backend (ya la tiene seteada), ej.:\n"
+            "  docker exec techo360-backend python3 -m ingestion.db"
+        )
+
+    migrar_columna_codigo_divipola(database_url=database_url)
