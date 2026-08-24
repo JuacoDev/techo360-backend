@@ -7,7 +7,6 @@
 #
 # from db.session import Base
 # from sqlalchemy import Column, Integer, String
-#
 # class Vivienda(Base):
 #     __tablename__ = "viviendas"
 #     id = Column(Integer, primary_key=True)

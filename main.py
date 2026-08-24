@@ -5,7 +5,7 @@ from fastapi import FastAPI
 
 from core.config import settings
 from ingestion.scheduler import iniciar_scheduler
-from routers import email, health, otp
+from routers import auth, email, health, otp, usuarios, zonas
 from services.email_service import email_service
 
 app = FastAPI(
@@ -17,6 +17,9 @@ app = FastAPI(
 app.include_router(health.router)
 app.include_router(email.router)
 app.include_router(otp.router)
+app.include_router(zonas.router)
+app.include_router(usuarios.router)
+app.include_router(auth.router)
 
 
 @app.on_event("startup")

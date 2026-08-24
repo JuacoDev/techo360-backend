@@ -7,3 +7,6 @@ httpx
 redis
 pydantic[email]
 apscheduler
+PyJWT
+passlib[bcrypt]
+geoalchemy2
