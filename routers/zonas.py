@@ -27,7 +27,7 @@ def obtener_zonas(
                 codigo_departamento AS codigo,
                 nombre,
                 ST_AsGeoJSON(geom) AS geometry
-            FROM zonas_departamento
+            FROM zonas_departamento 
             ORDER BY nombre
         """)
 
