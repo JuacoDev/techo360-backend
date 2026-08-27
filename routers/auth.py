@@ -32,12 +32,14 @@ def login(datos: LoginRequest, db: Session = Depends(get_db)):
             headers={"WWW-Authenticate": "Bearer"}
         )
 
-    token = crear_access_token(usuario.id, usuario.correo)
+    token = crear_access_token(usuario.id, usuario.correo, usuario.nameVar)
+
 
     return {
         "access_token": token,
         "token_type": "bearer"
     }
+
 
 
 # REGISTRO
@@ -55,12 +57,10 @@ def register(correo: str, password: str, name: str, db: Session = Depends(get_db
             detail="Usuario ya existe"
         )
 
-    # Hashear la contraseña antes de guardar
-    password_hash = pwd_context.hash(password)
 
     nuevo_usuario = MapCalorUser(
         correo=correo,
-        passwordVar=password_hash,
+        passwordVar=password,
         nameVar=name
     )
     db.add(nuevo_usuario)

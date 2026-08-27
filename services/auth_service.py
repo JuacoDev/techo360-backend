@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+from sqlalchemy import or_
 
 import jwt
 from passlib.context import CryptContext
@@ -14,16 +15,18 @@ pwd_context = CryptContext(
 )
 
 
-def verificar_password(password: str, password_hash: str) -> bool:
-    return pwd_context.verify(password, password_hash)
+def verificar_password(password: str, password_db: str) -> bool:
+    return password == password_db
 
 
-def crear_access_token(user_id: int, correo: str) -> str:
+
+def crear_access_token(user_id: int, correo: str, name: str) -> str:
     ahora = datetime.now(timezone.utc)
 
     payload = {
         "sub": str(user_id),
         "correo": correo,
+        "name": name,
         "iat": ahora,
         "exp": ahora + timedelta(hours=1),
     }
@@ -35,14 +38,17 @@ def crear_access_token(user_id: int, correo: str) -> str:
     )
 
 
+
+
 def autenticar_usuario(
     db: Session,
-    correo: str,
+    identifier: str,  # puede ser correo o usuario
     password: str
 ):
     usuario = (
         db.query(MapCalorUser)
-        .filter(MapCalorUser.correo == correo)
+        .filter(or_(MapCalorUser.correo == identifier,
+                    MapCalorUser.nameVar == identifier))
         .first()
     )
 
