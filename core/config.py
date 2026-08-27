@@ -2,7 +2,9 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
-    database_url: str = "postgresql://techo360_users:4NNwBCnjzWg2VZ3vhXwJcNcn@postgres:5434/techo360_usuarios"
+    database_url: str = "postgresql://techo360_users:4NNwBCnjzWg2VZ3vhXwJcNcn@100.116.197.118:5434/techo360_usuarios"
+
+
     database_users_url: str
     redis_url: str = "redis://redis:6379/0"
     rabbitmq_url: str
