@@ -4,13 +4,21 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
 
     # Base de datos utilizada actualmente por SQLAlchemy
-    database_url: str
+    # NOTA: valor por defecto es un placeholder de desarrollo local, NO
+    # apunta a produccion. Definir DATABASE_URL en .env para la conexion
+    # real (nunca comitear la URL real aqui).
+    database_url: str = (
+        "postgresql://usuario:password@localhost:5432/techo360_principal"
+    )
 
     # Redis
     redis_url: str = "redis://localhost:6379/0"
 
     # RabbitMQ
-    rabbitmq_url: str
+    # NOTA: mismo criterio que database_url -- placeholder, no produccion.
+    rabbitmq_url: str = (
+        "amqp://usuario:password@localhost:5672/"
+    )
 
     # Brevo
     brevo_api_key: str
