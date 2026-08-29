@@ -21,6 +21,16 @@ router = APIRouter(
 class LoginRequest(BaseModel):
     identifier: str
     password: str
+
+class LoginResponse(BaseModel):
+    access_token: str
+    token_type: str
+
+
+class CurrentUserResponse(BaseModel):
+    id: int
+    correo: str
+    namevar: str
     
 # -------------------
 # Configuración de OAuth2
@@ -44,7 +54,20 @@ def crear_access_token(user_id: int, correo: str, name: str) -> str:
 # -------------------
 # Login
 # -------------------
-@router.post("/login", summary="Iniciar sesión")
+@router.post(
+    "/login",
+    summary="Iniciar sesión",
+    description="Autentica un usuario mediante su identificador y contraseña y devuelve un token JWT.",
+    response_model=LoginResponse,
+    responses={
+        401: {
+            "description": "Credenciales incorrectas o usuario no autorizado."
+        },
+        422: {
+            "description": "Datos de entrada inválidos."
+        }
+    }
+)
 def login(datos: LoginRequest, db: Session = Depends(get_db)):
     usuario = autenticar_usuario(db, datos.identifier, datos.password)
 
@@ -104,7 +127,17 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
 # -------------------
 # Endpoint protegido
 # -------------------
-@router.get("/me", summary="Usuario autenticado")
+@router.get(
+    "/me",
+    summary="Usuario autenticado",
+    description="Obtiene la información del usuario autenticado mediante el token JWT.",
+    response_model=CurrentUserResponse,
+    responses={
+        401: {
+            "description": "Token inválido, expirado o usuario no encontrado."
+        }
+    }
+)
 def read_users_me(current_user: MapCalorUser = Depends(get_current_user)):
     return {
         "id": current_user.id,
