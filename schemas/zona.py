@@ -1,15 +1,14 @@
+from typing import Any
+
 from pydantic import BaseModel
 
 
-class ZonaResponse(BaseModel):
-    id: int
-    municipio: str
-    nombre: str
-    latitud: float
-    longitud: float
+class GeoJSONFeature(BaseModel):
+    type: str
+    geometry: dict[str, Any]
+    properties: dict[str, Any]
 
-    class Config:
-        from_attributes = True
 
-        from pydantic import BaseModel
-
+class GeoJSONFeatureCollection(BaseModel):
+    type: str
+    features: list[GeoJSONFeature]

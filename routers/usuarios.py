@@ -17,10 +17,11 @@ router = APIRouter(
 @router.get(
     "",
     response_model=List[UsuarioResponse],
+    status_code=200,
     summary="Obtener usuarios",
     description="Obtiene los usuarios disponibles."
 )
 def obtener_usuarios(db: Session = Depends(get_db)):
-    usuarios = db.query(Zona).all()
+    usuarios = db.query(Usuario).all()
 
     return usuarios
