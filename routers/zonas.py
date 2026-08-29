@@ -3,6 +3,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from db.session import get_db
+from schemas.zonas import GeoJSONFeatureCollection
 
 
 router = APIRouter(
@@ -11,17 +12,35 @@ router = APIRouter(
 )
 
 
-@router.get("")
+@router.get(
+    "",
+    response_model=GeoJSONFeatureCollection,
+    summary="Obtener zonas geográficas",
+    description=(
+        "Obtiene las zonas geográficas de Techo 360 en formato GeoJSON. "
+        "Permite consultar departamentos o municipios."
+    ),
+    responses={
+        200: {
+            "description": "Zonas obtenidas correctamente."
+        },
+        422: {
+            "description": "El parámetro nivel no tiene un valor válido."
+        },
+        500: {
+            "description": "Error al consultar las zonas en la base de datos."
+        }
+    }
+)
 def obtener_zonas(
     nivel: str = Query(
         ...,
         pattern="^(departamento|municipio)$",
-        description="Nivel geográfico: departamento o municipio"
+        description="Nivel geográfico que se desea consultar."
     ),
     db: Session = Depends(get_db)
 ):
     if nivel == "departamento":
-
         query = text("""
             SELECT
                 codigo_departamento AS codigo,
@@ -32,7 +51,6 @@ def obtener_zonas(
         """)
 
     else:
-
         query = text("""
             SELECT
                 codigo_municipio AS codigo,
@@ -49,7 +67,6 @@ def obtener_zonas(
         features = []
 
         for zona in resultados:
-
             properties = {
                 "codigo": zona["codigo"],
                 "nombre": zona["nombre"]

@@ -2,6 +2,7 @@ import asyncio
 
 import redis.asyncio as aioredis
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from core.config import settings
 from ingestion.scheduler import iniciar_scheduler
@@ -14,6 +15,19 @@ app = FastAPI(
     version="0.1.0"
 )
 
+# Configuración de CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173"
+    ],  # frontend en Vite
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Routers
 app.include_router(health.router)
 app.include_router(email.router)
 app.include_router(otp.router)

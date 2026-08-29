@@ -17,6 +17,7 @@ router = APIRouter(
 @router.get(
     "",
     response_model=List[UsuarioResponse],
+    status_code=200,
     summary="Obtener usuarios",
     description="Obtiene los usuarios disponibles."
 )
