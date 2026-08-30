@@ -12,5 +12,15 @@ class MapCalor(Base):
     yearM = Column(Integer, nullable=False)
     originVar = Column(Text)
 
+    # NULL para todo dato real observado -- solo se llena para filas de
+    # relleno/estimacion (ver convencion de originVar documentada en
+    # ingestion/db.py). Nombre en minuscula a proposito, sin mapeo
+    # explicito de columna: coincide tal cual con el nombre real que
+    # Postgres pliega (ver aviso del modulo sobre nameVar/yearM/originVar,
+    # que SI necesitarian Column(name="...") si algun dia se usan de
+    # verdad -- intervaloconfianza no tiene ese problema al ser todo
+    # minuscula desde el nombre del atributo).
+    intervaloconfianza = Column(Numeric, nullable=True)
+
     latitud = Column(Numeric)
     longitud = Column(Numeric)

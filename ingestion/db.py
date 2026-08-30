@@ -62,6 +62,49 @@ resuelve la coincidencia igual sin importar como se escriban.
 >>> dueño de crear). Se corre una sola vez, a mano, antes de desplegar
 >>> este cambio -- ver el bloque `if __name__ == "__main__"` al final
 >>> del archivo.
+
+>>> originVar / intervaloConfianza (agregado 2026-08-30) -- esquema de
+>>> procedencia de datos, para las 3 piezas de relleno de MapCalorDB
+>>> (cobertura de acueducto/alcantarillado, tenencia informal, deficit
+>>> habitacional) que necesitan datos 2025-2026 sin serie historica real
+>>> completa. Principio rector: ningun dato estimado puede confundirse
+>>> con un dato real -- por eso originVar deja de ser solo "de que fuente
+>>> vino" y pasa a ser tambien "es un dato observado o un relleno, y con
+>>> que metodo". intervaloConfianza queda NULL siempre que originVar sea
+>>> una fuente real (un dato observado no tiene intervalo de confianza,
+>>> por definicion); solo se llena en filas de relleno, como proxy del
+>>> error historico del metodo usado (no es un intervalo de prediccion
+>>> estadisticamente riguroso -- se documenta como tal en cada caso).
+>>>
+>>> Valores de originVar en uso (reales, ya existentes, sin tocar):
+>>>   "TerriData"      -- dato real observado, via TerriDataAdapter.
+>>>   "IGAC Catastro"  -- dato real observado, via IGACCatastroAdapter.
+>>>
+>>> Valores de originVar para relleno (esquema de procedencia, Sprint 3):
+>>>   "ultimo-valor-observado" -- baseline ingenuo (repetir el ultimo
+>>>       valor real conocido). Usado para cobertura_acueducto/
+>>>       cobertura_alcantarillado 2025-2026 (decision del 30-ago:
+>>>       el LightGBM entrenado para estas dos variables especificas
+>>>       queda PEOR que este mismo baseline en el set de test real ya
+>>>       documentado -- no es defendible usar a proposito el metodo que
+>>>       ya se sabe que es peor solo porque tambien es "un modelo").
+>>>   "interpolacion-lineal" -- interpolar entre dos puntos reales
+>>>       conocidos. Reservado para tenencia_informal_terrenos 2024-2025
+>>>       (Pieza 2, prompt separado, todavia no implementado).
+>>>   "SAE-censo2018" -- Small Area Estimation con covariables del censo
+>>>       2018. Reservado para deficit_habitacional_cuantitativo/
+>>>       cualitativo (Pieza 3, prompt separado, todavia no
+>>>       implementado) -- las 34 filas reales de estas variables son
+>>>       agregados DEPARTAMENTALES (0 municipios), asi que aqui SAE no
+>>>       es opcional: es el unico metodo que puede bajar un dato
+>>>       departamental a nivel municipio.
+>>>   "LightGBM-proyeccion" -- reservado para cuando un modelo entrenado
+>>>       SI demuestre superar su baseline ingenuo correspondiente (ej.
+>>>       si densidad_poblacional alguna vez necesitara proyeccion mas
+>>>       alla de 2026 -- esa variable si supero el baseline en el
+>>>       entrenamiento ya documentado). No usar este valor solo porque
+>>>       el metodo "suena mas sofisticado" si la evidencia real dice
+>>>       que un metodo mas simple generaliza mejor.
 """
 import logging
 
