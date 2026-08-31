@@ -61,6 +61,31 @@ def _es_agregado_departamental(codigo_entidad: str) -> bool:
     return len(codigo) == 5 and codigo.endswith("000")
 
 
+def _parsear_numero_terridata(valor_crudo) -> float:
+    """TerriData usa formato numerico espanol: '.' como separador de
+    miles, ',' como separador decimal (ej. '2.905,04' == 2905.04).
+
+    Bug real confirmado en produccion (31-ago-2026): el parseo anterior
+    (solo `.replace(",", ".")`) rompia cualquier valor >= 1,000, porque
+    '.' ya aparecia como separador de miles en el string original --
+    "2.905,04".replace(",", ".") da "2.905.04", invalido para float().
+    Afectaba en la practica solo a densidad_poblacional (hab/km², la
+    unica de las variables de TerriData que cruza 1,000 con
+    normalidad -- cobertura_acueducto/alcantarillado son porcentajes,
+    nunca pasan de 100) -- 17 municipios, entre ellos varias capitales
+    de departamento (Bogota, Medellin, Cali, Barranquilla, Cartagena,
+    Bucaramanga, Tunja, Armenia), perdian su fila en TODOS los años
+    porque su densidad historica siempre estuvo por encima de 1,000.
+
+    Quitar los puntos ANTES de convertir la coma es seguro incluso para
+    valores < 1,000 (sin puntos que quitar, el resultado es identico al
+    parseo anterior)."""
+    texto = str(valor_crudo).strip()
+    texto_sin_miles = texto.replace(".", "")
+    texto_normalizado = texto_sin_miles.replace(",", ".")
+    return float(texto_normalizado)
+
+
 MAPEO_DIMENSIONES = {
     # Confirmado real via buscar_indicadores('1', 'densidad') -- vive en
     # dimension 1 ("Descripcion general"), no en la 2 como se supuso
@@ -204,6 +229,7 @@ class TerriDataAdapter(DataSourceAdapter):
                 raise ValueError(f"'{var_interna}' no esta mapeada en MAPEO_DIMENSIONES.")
 
             agregados_departamentales_excluidos = 0
+            valores_no_parseables = 0
             registros_var = 0
             for fila in self._iterar_filas_dimension(info["dimension"]):
                 if fila.get("Indicador") != info["indicador"]:
@@ -217,17 +243,28 @@ class TerriDataAdapter(DataSourceAdapter):
                     agregados_departamentales_excluidos += 1
                     continue
 
+                dato_crudo = fila.get("Dato Numérico", "nan")
                 try:
                     records.append(IndicadorRecord(
                         codigo_divipola=codigo,
                         entidad_territorial=fila.get("Entidad", "").strip(),
                         variable=var_interna,
-                        valor=float(str(fila.get("Dato Numérico", "nan")).replace(",", ".")),
+                        valor=_parsear_numero_terridata(dato_crudo),
                         anio=int(anio_fila) if anio_fila else 0,
                         fuente=self.nombre,
                     ))
                     registros_var += 1
                 except (TypeError, ValueError):
+                    # Antes silencioso (bug real: 76 municipios de
+                    # densidad_poblacional perdieron su fila sin ningun
+                    # rastro en el log). Se loguea con el valor crudo
+                    # que fallo, para que un problema similar en el
+                    # futuro no vuelva a pasar desapercibido.
+                    valores_no_parseables += 1
+                    logger.warning(
+                        f"'{var_interna}': no se pudo parsear 'Dato Numerico'={dato_crudo!r} para "
+                        f"municipio {codigo} ({fila.get('Entidad', '').strip()}), año {anio_fila} -- fila descartada."
+                    )
                     continue
 
             if agregados_departamentales_excluidos:
@@ -235,6 +272,11 @@ class TerriDataAdapter(DataSourceAdapter):
                     f"'{var_interna}': {agregados_departamentales_excluidos} fila(s) excluidas por ser "
                     f"agregado departamental (Codigo Entidad terminado en '000', no un municipio real) -- "
                     f"{registros_var} registro(s) de municipio real conservados."
+                )
+            if valores_no_parseables:
+                logger.warning(
+                    f"'{var_interna}': {valores_no_parseables} fila(s) descartadas por 'Dato Numerico' "
+                    f"no parseable -- ver advertencias individuales arriba."
                 )
 
         return records
