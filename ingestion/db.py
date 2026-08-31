@@ -106,7 +106,36 @@ resuelve la coincidencia igual sin importar como se escriban.
 >>>
 >>> Valores de originVar en uso (reales, ya existentes, sin tocar):
 >>>   "TerriData"      -- dato real observado, via TerriDataAdapter.
->>>   "IGAC Catastro"  -- dato real observado, via IGACCatastroAdapter.
+>>>   "IGAC Catastro"  -- dato real observado, via IGACCatastroAdapter,
+>>>       PERO ver aviso especial sobre tenencia_informal_terrenos mas
+>>>       abajo -- esta fuente es un snapshot EN VIVO (capa ArcGIS del
+>>>       IGAC, sin serie historica real), asi que "IGAC Catastro" solo
+>>>       es un dato real observado para el año en que la fuente
+>>>       realmente se consulto -- pedirle un año distinto via --anio no
+>>>       produce un dato real de ese año, produce el estado actual
+>>>       etiquetado con un año falso (ver caso documentado abajo).
+>>>
+>>> >>> CASO REAL: tenencia_informal_terrenos quedo con UN SOLO año
+>>> >>> real (30/31-ago-2026) <<<
+>>> Entre el 17-ago-2026 (creacion de IGACCatastroAdapter, commit
+>>> 00fa4cf) y el 23-ago-2026 02:51 (activacion del guardado de
+>>> codigoDivipola, commit 9151ba9) se cargaron 1,033 filas con
+>>> yearm=2023 para esta variable, via `--anio 2023` pasado a mano al
+>>> runner -- pero IGACCatastroAdapter no tiene forma de dar un dato
+>>> real de 2023 (es un snapshot en vivo), asi que esas filas eran en
+>>> realidad el estado ACTUAL del catastro (de esos dias de agosto)
+>>> mal etiquetado. Se confirmo con evidencia concluyente (30-ago-2026):
+>>> las 1,033 filas de "2023" y las 1,033 de "2026" (la corrida real,
+>>> posterior) daban el MISMO valor exacto en el 100% de los casos
+>>> (media/desviacion de diferencia = 0.000000) -- imposible si fueran
+>>> mediciones reales independientes. Se borraron: primero 2,062 filas
+>>> de interpolacion lineal 2024-2025 que se habian calculado sobre esa
+>>> base falsa, y despues las 1,033 filas fantasma de "2023" mismas.
+>>> tenencia_informal_terrenos quedo con UNA sola observacion real:
+>>> 2026 (1,033 filas). No hay nada que ofrecer para otros años hasta
+>>> que exista una segunda medicion real futura que permita alguna
+>>> forma de proyeccion o interpolacion honesta -- GET /api/zonas debe
+>>> reflejar esto (una sola año disponible), no inventar mas relleno.
 >>>
 >>> Valores de originVar para relleno (esquema de procedencia, Sprint 3):
 >>>   "ultimo-valor-observado" -- baseline ingenuo (repetir el ultimo
@@ -117,8 +146,11 @@ resuelve la coincidencia igual sin importar como se escriban.
 >>>       documentado -- no es defendible usar a proposito el metodo que
 >>>       ya se sabe que es peor solo porque tambien es "un modelo").
 >>>   "interpolacion-lineal" -- interpolar entre dos puntos reales
->>>       conocidos. Reservado para tenencia_informal_terrenos 2024-2025
->>>       (Pieza 2, prompt separado, todavia no implementado).
+>>>       conocidos. Se intento para tenencia_informal_terrenos
+>>>       2024-2025 (30-ago-2026) pero se revirtio por completo (ver
+>>>       caso real documentado arriba) -- los "2 puntos reales" no lo
+>>>       eran. Sigue reservado para el dia en que una variable tenga de
+>>>       verdad 2+ años reales distintos que interpolar.
 >>>   "SAE-censo2018" -- Small Area Estimation con covariables del censo
 >>>       2018. Reservado para deficit_habitacional_cuantitativo/
 >>>       cualitativo (Pieza 3, prompt separado, todavia no
