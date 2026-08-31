@@ -231,6 +231,26 @@ class TerriDataAdapter(DataSourceAdapter):
             agregados_departamentales_excluidos = 0
             valores_no_parseables = 0
             registros_var = 0
+
+            # (codigo, anio) -> (mes_int, fila) -- TerriData actualiza
+            # cobertura_acueducto/alcantarillado con mas frecuencia que
+            # una vez al año (por eso se eligio la variante "REC" sobre
+            # "Censo", ver MAPEO_DIMENSIONES mas arriba): confirmado en
+            # vivo que 2,149 combinaciones (codigo, año) tienen 2+
+            # lecturas mensuales, 360-373 de ellas con VALORES distintos
+            # entre lecturas (no solo repeticion). MapCalorDB solo
+            # guarda una fila por (codigo, variable, año) -- se
+            # necesita elegir UNA, de forma explicita y reproducible: se
+            # queda la lectura del MES MAS RECIENTE del año (el dato mas
+            # vigente, mismo criterio que motivo elegir REC en primer
+            # lugar). Antes esto se resolvia en silencio por el UPDATE
+            # de guardar_indicador() (la ultima fila procesada del feed
+            # ganaba -- sin ningun criterio explicito, solo el orden de
+            # iteracion), lo cual dejo de ser seguro con execute_values
+            # (un INSERT multi-fila con la misma llave repetida dispara
+            # el trigger de unicidad).
+            mejores_filas: dict[tuple[str, str], tuple[int, dict]] = {}
+
             for fila in self._iterar_filas_dimension(info["dimension"]):
                 if fila.get("Indicador") != info["indicador"]:
                     continue
@@ -243,6 +263,19 @@ class TerriDataAdapter(DataSourceAdapter):
                     agregados_departamentales_excluidos += 1
                     continue
 
+                try:
+                    mes = int(fila.get("Mes", "") or 0)
+                except (TypeError, ValueError):
+                    mes = 0
+
+                clave = (codigo, anio_fila)
+                actual = mejores_filas.get(clave)
+                if actual is None or mes >= actual[0]:
+                    mejores_filas[clave] = (mes, fila)
+
+            for _clave, (_mes, fila) in mejores_filas.items():
+                anio_fila = fila.get("Año", "")
+                codigo = fila.get("Código Entidad", "").strip()
                 dato_crudo = fila.get("Dato Numérico", "nan")
                 try:
                     records.append(IndicadorRecord(
