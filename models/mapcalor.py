@@ -5,6 +5,14 @@ from db.session import Base
 class MapCalor(Base):
     __tablename__ = "mapcalordb"
 
+    # UNIQUE(codigoDivipola, nameVar, yearM) a nivel de tabla (cambio
+    # 2026-08-30, ver ingestion/db.py) -- antes era por nombre de
+    # municipio; se corrigio porque el nombre no es una clave confiable
+    # (66 nombres del anexo del DANE se repiten entre departamentos
+    # distintos, ej. "Sabanalarga" en Antioquia/Atlantico/Casanare).
+    # No declarado aqui como UniqueConstraint porque esta clase ORM no
+    # se usa para escribir en produccion (ver ingestion/db.py, que
+    # escribe con SQL directo por el trigger BEFORE INSERT de Jeremy).
     id = Column(Integer, primary_key=True)
     municipios = Column(Text, nullable=False)
     nameVar = Column(Text, nullable=False)

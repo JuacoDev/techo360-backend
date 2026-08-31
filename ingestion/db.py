@@ -7,9 +7,37 @@ Esquema real definido por Jeremy (DBA) -- dos tablas, con dos
 comportamientos de guardado DISTINTOS por una razon tecnica real:
 
 1. MapCalorDB (indicadores numericos)
-   Tiene UNIQUE(municipios, nameVar, yearM) + un TRIGGER BEFORE INSERT
-   que LANZA UNA EXCEPCION si ya existe esa combinacion (SQLSTATE
-   23505, no es un fallo silencioso).
+   Tiene UNIQUE(codigoDivipola, nameVar, yearM) + un TRIGGER BEFORE
+   INSERT que LANZA UNA EXCEPCION si ya existe esa combinacion
+   (SQLSTATE 23505, no es un fallo silencioso).
+
+   >>> CAMBIO 2026-08-30: la clave de unicidad paso de
+   >>> (municipios, nameVar, yearM) a (codigoDivipola, nameVar, yearM),
+   >>> tanto en el CONSTRAINT de la tabla como en el cuerpo de la
+   >>> funcion trigger (validar_unicidad_mapcalordb() -- ver mas abajo,
+   >>> antes comparaba por NOMBRE, ahora por CODIGO). Motivo: al
+   >>> insertar las 3,366 filas municipales de deficit habitacional
+   >>> (DaneDeficitAdapter), 66 nombres de municipio del anexo del DANE
+   >>> resultaron estar duplicados entre departamentos distintos (151
+   >>> municipios reales, ej. "Sabanalarga" existe en Antioquia,
+   >>> Atlantico Y Casanare con codigos 05628/08638/85300) -- exactamente
+   >>> el mismo problema de fondo ya documentado mas abajo con "El
+   >>> Carmen" (Choco vs. Santander), pero confirmado aqui con alcance
+   >>> mucho mayor. Un UNIQUE por nombre de texto no puede distinguir
+   >>> estos casos; el codigo DIVIPOLA si. Decision tomada con Juan
+   >>> David: corregir el esquema en la raiz en vez de seguir
+   >>> parchando nombres de texto caso por caso.
+   >>>
+   >>> Consecuencia aceptada: para las filas historicas viejas que
+   >>> tienen codigoDivipola NULL (ver aviso de mas abajo sobre
+   >>> migrar_columna_codigo_divipola), Postgres trata cada NULL como
+   >>> distinto de cualquier otro NULL en un UNIQUE -- esas filas
+   >>> quedan sin proteccion de duplicados a nivel de base de datos
+   >>> (antes la tenian, via el nombre). No se reconstruyo el codigo
+   >>> para esas filas viejas (mismo motivo ya explicado abajo: no se
+   >>> puede derivar de forma confiable a partir del nombre ya
+   >>> guardado). guardar_indicador() abajo compensa esto a nivel de
+   >>> aplicacion cuando el registro entrante SI trae codigo.
 
    >>> IMPORTANTE: este trigger hace que un INSERT ... ON CONFLICT ...
    >>> DO UPDATE nunca llegue a la parte de UPDATE. En Postgres, los
@@ -129,19 +157,38 @@ def guardar_indicador(database_url: str, record: IndicadorRecord) -> str:
     vacio) porque no todas las fuentes lo dan (ej. FNA probablemente solo
     da el nombre, igual que ya contempla validacion.py); NULL es lo que
     extraer_panel.py espera para decidir cuando usar su fallback por
-    nombre."""
+    nombre.
+
+    Busqueda del UPDATE (cambio 2026-08-30, ver aviso del modulo): si el
+    registro entrante trae codigo_divipola, el UPDATE busca por CODIGO
+    (coherente con la clave real de unicidad ahora); solo cuando no hay
+    codigo cae al viejo criterio por nombre, para las fuentes que aun no
+    lo dan. Buscar siempre por nombre aqui habria reintroducido el mismo
+    bug que motivo el cambio de esquema: con nombre duplicado entre
+    municipios reales distintos (ej. "Sabanalarga"), un UPDATE por nombre
+    actualizaria las dos filas a la vez con el valor de una sola."""
     codigo_divipola = record.codigo_divipola.strip() if record.codigo_divipola else None
     conn = _conectar(database_url)
     try:
         with conn, conn.cursor() as cur:
-            cur.execute(
-                """
-                UPDATE MapCalorDB
-                SET valueVar = %s, originVar = %s, codigoDivipola = %s
-                WHERE municipios = %s AND nameVar = %s AND yearM = %s
-                """,
-                (record.valor, record.fuente, codigo_divipola, record.entidad_territorial, record.variable, record.anio),
-            )
+            if codigo_divipola:
+                cur.execute(
+                    """
+                    UPDATE MapCalorDB
+                    SET valueVar = %s, originVar = %s, municipios = %s
+                    WHERE codigoDivipola = %s AND nameVar = %s AND yearM = %s
+                    """,
+                    (record.valor, record.fuente, record.entidad_territorial, codigo_divipola, record.variable, record.anio),
+                )
+            else:
+                cur.execute(
+                    """
+                    UPDATE MapCalorDB
+                    SET valueVar = %s, originVar = %s, codigoDivipola = %s
+                    WHERE municipios = %s AND nameVar = %s AND yearM = %s
+                    """,
+                    (record.valor, record.fuente, codigo_divipola, record.entidad_territorial, record.variable, record.anio),
+                )
             if cur.rowcount > 0:
                 logger.info(f"Actualizado: {record.entidad_territorial} / {record.variable} / {record.anio}")
                 return "actualizado"
