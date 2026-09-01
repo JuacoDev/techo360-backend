@@ -61,6 +61,31 @@ def _es_agregado_departamental(codigo_entidad: str) -> bool:
     return len(codigo) == 5 and codigo.endswith("000")
 
 
+def _parsear_numero_terridata(valor_crudo) -> float:
+    """TerriData usa formato numerico espanol: '.' como separador de
+    miles, ',' como separador decimal (ej. '2.905,04' == 2905.04).
+
+    Bug real confirmado en produccion (31-ago-2026): el parseo anterior
+    (solo `.replace(",", ".")`) rompia cualquier valor >= 1,000, porque
+    '.' ya aparecia como separador de miles en el string original --
+    "2.905,04".replace(",", ".") da "2.905.04", invalido para float().
+    Afectaba en la practica solo a densidad_poblacional (hab/km², la
+    unica de las variables de TerriData que cruza 1,000 con
+    normalidad -- cobertura_acueducto/alcantarillado son porcentajes,
+    nunca pasan de 100) -- 17 municipios, entre ellos varias capitales
+    de departamento (Bogota, Medellin, Cali, Barranquilla, Cartagena,
+    Bucaramanga, Tunja, Armenia), perdian su fila en TODOS los años
+    porque su densidad historica siempre estuvo por encima de 1,000.
+
+    Quitar los puntos ANTES de convertir la coma es seguro incluso para
+    valores < 1,000 (sin puntos que quitar, el resultado es identico al
+    parseo anterior)."""
+    texto = str(valor_crudo).strip()
+    texto_sin_miles = texto.replace(".", "")
+    texto_normalizado = texto_sin_miles.replace(",", ".")
+    return float(texto_normalizado)
+
+
 MAPEO_DIMENSIONES = {
     # Confirmado real via buscar_indicadores('1', 'densidad') -- vive en
     # dimension 1 ("Descripcion general"), no en la 2 como se supuso
@@ -204,7 +229,28 @@ class TerriDataAdapter(DataSourceAdapter):
                 raise ValueError(f"'{var_interna}' no esta mapeada en MAPEO_DIMENSIONES.")
 
             agregados_departamentales_excluidos = 0
+            valores_no_parseables = 0
             registros_var = 0
+
+            # (codigo, anio) -> (mes_int, fila) -- TerriData actualiza
+            # cobertura_acueducto/alcantarillado con mas frecuencia que
+            # una vez al año (por eso se eligio la variante "REC" sobre
+            # "Censo", ver MAPEO_DIMENSIONES mas arriba): confirmado en
+            # vivo que 2,149 combinaciones (codigo, año) tienen 2+
+            # lecturas mensuales, 360-373 de ellas con VALORES distintos
+            # entre lecturas (no solo repeticion). MapCalorDB solo
+            # guarda una fila por (codigo, variable, año) -- se
+            # necesita elegir UNA, de forma explicita y reproducible: se
+            # queda la lectura del MES MAS RECIENTE del año (el dato mas
+            # vigente, mismo criterio que motivo elegir REC en primer
+            # lugar). Antes esto se resolvia en silencio por el UPDATE
+            # de guardar_indicador() (la ultima fila procesada del feed
+            # ganaba -- sin ningun criterio explicito, solo el orden de
+            # iteracion), lo cual dejo de ser seguro con execute_values
+            # (un INSERT multi-fila con la misma llave repetida dispara
+            # el trigger de unicidad).
+            mejores_filas: dict[tuple[str, str], tuple[int, dict]] = {}
+
             for fila in self._iterar_filas_dimension(info["dimension"]):
                 if fila.get("Indicador") != info["indicador"]:
                     continue
@@ -218,16 +264,40 @@ class TerriDataAdapter(DataSourceAdapter):
                     continue
 
                 try:
+                    mes = int(fila.get("Mes", "") or 0)
+                except (TypeError, ValueError):
+                    mes = 0
+
+                clave = (codigo, anio_fila)
+                actual = mejores_filas.get(clave)
+                if actual is None or mes >= actual[0]:
+                    mejores_filas[clave] = (mes, fila)
+
+            for _clave, (_mes, fila) in mejores_filas.items():
+                anio_fila = fila.get("Año", "")
+                codigo = fila.get("Código Entidad", "").strip()
+                dato_crudo = fila.get("Dato Numérico", "nan")
+                try:
                     records.append(IndicadorRecord(
                         codigo_divipola=codigo,
                         entidad_territorial=fila.get("Entidad", "").strip(),
                         variable=var_interna,
-                        valor=float(str(fila.get("Dato Numérico", "nan")).replace(",", ".")),
+                        valor=_parsear_numero_terridata(dato_crudo),
                         anio=int(anio_fila) if anio_fila else 0,
                         fuente=self.nombre,
                     ))
                     registros_var += 1
                 except (TypeError, ValueError):
+                    # Antes silencioso (bug real: 76 municipios de
+                    # densidad_poblacional perdieron su fila sin ningun
+                    # rastro en el log). Se loguea con el valor crudo
+                    # que fallo, para que un problema similar en el
+                    # futuro no vuelva a pasar desapercibido.
+                    valores_no_parseables += 1
+                    logger.warning(
+                        f"'{var_interna}': no se pudo parsear 'Dato Numerico'={dato_crudo!r} para "
+                        f"municipio {codigo} ({fila.get('Entidad', '').strip()}), año {anio_fila} -- fila descartada."
+                    )
                     continue
 
             if agregados_departamentales_excluidos:
@@ -235,6 +305,11 @@ class TerriDataAdapter(DataSourceAdapter):
                     f"'{var_interna}': {agregados_departamentales_excluidos} fila(s) excluidas por ser "
                     f"agregado departamental (Codigo Entidad terminado en '000', no un municipio real) -- "
                     f"{registros_var} registro(s) de municipio real conservados."
+                )
+            if valores_no_parseables:
+                logger.warning(
+                    f"'{var_interna}': {valores_no_parseables} fila(s) descartadas por 'Dato Numerico' "
+                    f"no parseable -- ver advertencias individuales arriba."
                 )
 
         return records

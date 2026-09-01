@@ -4,33 +4,26 @@ from sqlalchemy.orm import Session
 import jwt
 from datetime import datetime, timedelta, timezone
 from pydantic import BaseModel
+from schemas.auth import (
+    LoginRequest,
+    LoginResponse,
+    RegisterRequest,
+    RegisterResponse,
+    CurrentUserResponse
+)
 
 from db.session import get_db
 from models.mapcalor_user import MapCalorUser
 from services.auth_service import autenticar_usuario
 from core.config import settings
 
+
 router = APIRouter(
     prefix="/auth",
     tags=["auth"]
 )
 
-# -------------------
-# Esquema para login
-# -------------------
-class LoginRequest(BaseModel):
-    identifier: str
-    password: str
 
-class LoginResponse(BaseModel):
-    access_token: str
-    token_type: str
-
-
-class CurrentUserResponse(BaseModel):
-    id: int
-    correo: str
-    namevar: str
     
 # -------------------
 # Configuración de OAuth2
@@ -83,6 +76,65 @@ def login(datos: LoginRequest, db: Session = Depends(get_db)):
     return {
         "access_token": token,
         "token_type": "bearer"
+    }
+
+
+    # -------------------
+# Registro de usuario
+# -------------------
+@router.post(
+    "/register",
+    summary="Registrar usuario",
+    description="Registra un nuevo usuario en la base de datos.",
+    response_model=RegisterResponse,
+    status_code=status.HTTP_201_CREATED,
+    responses={
+        400: {
+            "description": "El correo o nombre de usuario ya está registrado."
+        },
+        422: {
+            "description": "Datos de entrada inválidos."
+        }
+    }
+)
+def register(datos: RegisterRequest, db: Session = Depends(get_db)):
+
+    # Verificar si ya existe el correo
+    usuario_correo = db.query(MapCalorUser).filter(
+        MapCalorUser.correo == datos.correo
+    ).first()
+
+    if usuario_correo:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="El correo ya está registrado"
+        )
+
+    # Verificar si ya existe el nombre
+    usuario_nombre = db.query(MapCalorUser).filter(
+        MapCalorUser.namevar == datos.namevar
+    ).first()
+
+    if usuario_nombre:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="El nombre de usuario ya está registrado"
+        )
+
+    # Crear usuario
+    nuevo_usuario = MapCalorUser(
+        correo=datos.correo,
+        namevar=datos.namevar,
+        passwordvar=datos.password
+    )
+
+    db.add(nuevo_usuario)
+    db.commit()
+    db.refresh(nuevo_usuario)
+
+    return {
+        "message": "Usuario registrado correctamente",
+        "id": nuevo_usuario.id
     }
 
 # -------------------

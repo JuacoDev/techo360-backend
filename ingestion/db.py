@@ -7,9 +7,37 @@ Esquema real definido por Jeremy (DBA) -- dos tablas, con dos
 comportamientos de guardado DISTINTOS por una razon tecnica real:
 
 1. MapCalorDB (indicadores numericos)
-   Tiene UNIQUE(municipios, nameVar, yearM) + un TRIGGER BEFORE INSERT
-   que LANZA UNA EXCEPCION si ya existe esa combinacion (SQLSTATE
-   23505, no es un fallo silencioso).
+   Tiene UNIQUE(codigoDivipola, nameVar, yearM) + un TRIGGER BEFORE
+   INSERT que LANZA UNA EXCEPCION si ya existe esa combinacion
+   (SQLSTATE 23505, no es un fallo silencioso).
+
+   >>> CAMBIO 2026-08-30: la clave de unicidad paso de
+   >>> (municipios, nameVar, yearM) a (codigoDivipola, nameVar, yearM),
+   >>> tanto en el CONSTRAINT de la tabla como en el cuerpo de la
+   >>> funcion trigger (validar_unicidad_mapcalordb() -- ver mas abajo,
+   >>> antes comparaba por NOMBRE, ahora por CODIGO). Motivo: al
+   >>> insertar las 3,366 filas municipales de deficit habitacional
+   >>> (DaneDeficitAdapter), 66 nombres de municipio del anexo del DANE
+   >>> resultaron estar duplicados entre departamentos distintos (151
+   >>> municipios reales, ej. "Sabanalarga" existe en Antioquia,
+   >>> Atlantico Y Casanare con codigos 05628/08638/85300) -- exactamente
+   >>> el mismo problema de fondo ya documentado mas abajo con "El
+   >>> Carmen" (Choco vs. Santander), pero confirmado aqui con alcance
+   >>> mucho mayor. Un UNIQUE por nombre de texto no puede distinguir
+   >>> estos casos; el codigo DIVIPOLA si. Decision tomada con Juan
+   >>> David: corregir el esquema en la raiz en vez de seguir
+   >>> parchando nombres de texto caso por caso.
+   >>>
+   >>> Consecuencia aceptada: para las filas historicas viejas que
+   >>> tienen codigoDivipola NULL (ver aviso de mas abajo sobre
+   >>> migrar_columna_codigo_divipola), Postgres trata cada NULL como
+   >>> distinto de cualquier otro NULL en un UNIQUE -- esas filas
+   >>> quedan sin proteccion de duplicados a nivel de base de datos
+   >>> (antes la tenian, via el nombre). No se reconstruyo el codigo
+   >>> para esas filas viejas (mismo motivo ya explicado abajo: no se
+   >>> puede derivar de forma confiable a partir del nombre ya
+   >>> guardado). guardar_indicador() abajo compensa esto a nivel de
+   >>> aplicacion cuando el registro entrante SI trae codigo.
 
    >>> IMPORTANTE: este trigger hace que un INSERT ... ON CONFLICT ...
    >>> DO UPDATE nunca llegue a la parte de UPDATE. En Postgres, los
@@ -62,6 +90,81 @@ resuelve la coincidencia igual sin importar como se escriban.
 >>> dueño de crear). Se corre una sola vez, a mano, antes de desplegar
 >>> este cambio -- ver el bloque `if __name__ == "__main__"` al final
 >>> del archivo.
+
+>>> originVar / intervaloConfianza (agregado 2026-08-30) -- esquema de
+>>> procedencia de datos, para las 3 piezas de relleno de MapCalorDB
+>>> (cobertura de acueducto/alcantarillado, tenencia informal, deficit
+>>> habitacional) que necesitan datos 2025-2026 sin serie historica real
+>>> completa. Principio rector: ningun dato estimado puede confundirse
+>>> con un dato real -- por eso originVar deja de ser solo "de que fuente
+>>> vino" y pasa a ser tambien "es un dato observado o un relleno, y con
+>>> que metodo". intervaloConfianza queda NULL siempre que originVar sea
+>>> una fuente real (un dato observado no tiene intervalo de confianza,
+>>> por definicion); solo se llena en filas de relleno, como proxy del
+>>> error historico del metodo usado (no es un intervalo de prediccion
+>>> estadisticamente riguroso -- se documenta como tal en cada caso).
+>>>
+>>> Valores de originVar en uso (reales, ya existentes, sin tocar):
+>>>   "TerriData"      -- dato real observado, via TerriDataAdapter.
+>>>   "IGAC Catastro"  -- dato real observado, via IGACCatastroAdapter,
+>>>       PERO ver aviso especial sobre tenencia_informal_terrenos mas
+>>>       abajo -- esta fuente es un snapshot EN VIVO (capa ArcGIS del
+>>>       IGAC, sin serie historica real), asi que "IGAC Catastro" solo
+>>>       es un dato real observado para el año en que la fuente
+>>>       realmente se consulto -- pedirle un año distinto via --anio no
+>>>       produce un dato real de ese año, produce el estado actual
+>>>       etiquetado con un año falso (ver caso documentado abajo).
+>>>
+>>> >>> CASO REAL: tenencia_informal_terrenos quedo con UN SOLO año
+>>> >>> real (30/31-ago-2026) <<<
+>>> Entre el 17-ago-2026 (creacion de IGACCatastroAdapter, commit
+>>> 00fa4cf) y el 23-ago-2026 02:51 (activacion del guardado de
+>>> codigoDivipola, commit 9151ba9) se cargaron 1,033 filas con
+>>> yearm=2023 para esta variable, via `--anio 2023` pasado a mano al
+>>> runner -- pero IGACCatastroAdapter no tiene forma de dar un dato
+>>> real de 2023 (es un snapshot en vivo), asi que esas filas eran en
+>>> realidad el estado ACTUAL del catastro (de esos dias de agosto)
+>>> mal etiquetado. Se confirmo con evidencia concluyente (30-ago-2026):
+>>> las 1,033 filas de "2023" y las 1,033 de "2026" (la corrida real,
+>>> posterior) daban el MISMO valor exacto en el 100% de los casos
+>>> (media/desviacion de diferencia = 0.000000) -- imposible si fueran
+>>> mediciones reales independientes. Se borraron: primero 2,062 filas
+>>> de interpolacion lineal 2024-2025 que se habian calculado sobre esa
+>>> base falsa, y despues las 1,033 filas fantasma de "2023" mismas.
+>>> tenencia_informal_terrenos quedo con UNA sola observacion real:
+>>> 2026 (1,033 filas). No hay nada que ofrecer para otros años hasta
+>>> que exista una segunda medicion real futura que permita alguna
+>>> forma de proyeccion o interpolacion honesta -- GET /api/zonas debe
+>>> reflejar esto (una sola año disponible), no inventar mas relleno.
+>>>
+>>> Valores de originVar para relleno (esquema de procedencia, Sprint 3):
+>>>   "ultimo-valor-observado" -- baseline ingenuo (repetir el ultimo
+>>>       valor real conocido). Usado para cobertura_acueducto/
+>>>       cobertura_alcantarillado 2025-2026 (decision del 30-ago:
+>>>       el LightGBM entrenado para estas dos variables especificas
+>>>       queda PEOR que este mismo baseline en el set de test real ya
+>>>       documentado -- no es defendible usar a proposito el metodo que
+>>>       ya se sabe que es peor solo porque tambien es "un modelo").
+>>>   "interpolacion-lineal" -- interpolar entre dos puntos reales
+>>>       conocidos. Se intento para tenencia_informal_terrenos
+>>>       2024-2025 (30-ago-2026) pero se revirtio por completo (ver
+>>>       caso real documentado arriba) -- los "2 puntos reales" no lo
+>>>       eran. Sigue reservado para el dia en que una variable tenga de
+>>>       verdad 2+ años reales distintos que interpolar.
+>>>   "SAE-censo2018" -- Small Area Estimation con covariables del censo
+>>>       2018. Reservado para deficit_habitacional_cuantitativo/
+>>>       cualitativo (Pieza 3, prompt separado, todavia no
+>>>       implementado) -- las 34 filas reales de estas variables son
+>>>       agregados DEPARTAMENTALES (0 municipios), asi que aqui SAE no
+>>>       es opcional: es el unico metodo que puede bajar un dato
+>>>       departamental a nivel municipio.
+>>>   "LightGBM-proyeccion" -- reservado para cuando un modelo entrenado
+>>>       SI demuestre superar su baseline ingenuo correspondiente (ej.
+>>>       si densidad_poblacional alguna vez necesitara proyeccion mas
+>>>       alla de 2026 -- esa variable si supero el baseline en el
+>>>       entrenamiento ya documentado). No usar este valor solo porque
+>>>       el metodo "suena mas sofisticado" si la evidencia real dice
+>>>       que un metodo mas simple generaliza mejor.
 """
 import logging
 
@@ -86,19 +189,38 @@ def guardar_indicador(database_url: str, record: IndicadorRecord) -> str:
     vacio) porque no todas las fuentes lo dan (ej. FNA probablemente solo
     da el nombre, igual que ya contempla validacion.py); NULL es lo que
     extraer_panel.py espera para decidir cuando usar su fallback por
-    nombre."""
+    nombre.
+
+    Busqueda del UPDATE (cambio 2026-08-30, ver aviso del modulo): si el
+    registro entrante trae codigo_divipola, el UPDATE busca por CODIGO
+    (coherente con la clave real de unicidad ahora); solo cuando no hay
+    codigo cae al viejo criterio por nombre, para las fuentes que aun no
+    lo dan. Buscar siempre por nombre aqui habria reintroducido el mismo
+    bug que motivo el cambio de esquema: con nombre duplicado entre
+    municipios reales distintos (ej. "Sabanalarga"), un UPDATE por nombre
+    actualizaria las dos filas a la vez con el valor de una sola."""
     codigo_divipola = record.codigo_divipola.strip() if record.codigo_divipola else None
     conn = _conectar(database_url)
     try:
         with conn, conn.cursor() as cur:
-            cur.execute(
-                """
-                UPDATE MapCalorDB
-                SET valueVar = %s, originVar = %s, codigoDivipola = %s
-                WHERE municipios = %s AND nameVar = %s AND yearM = %s
-                """,
-                (record.valor, record.fuente, codigo_divipola, record.entidad_territorial, record.variable, record.anio),
-            )
+            if codigo_divipola:
+                cur.execute(
+                    """
+                    UPDATE MapCalorDB
+                    SET valueVar = %s, originVar = %s, municipios = %s
+                    WHERE codigoDivipola = %s AND nameVar = %s AND yearM = %s
+                    """,
+                    (record.valor, record.fuente, record.entidad_territorial, codigo_divipola, record.variable, record.anio),
+                )
+            else:
+                cur.execute(
+                    """
+                    UPDATE MapCalorDB
+                    SET valueVar = %s, originVar = %s, codigoDivipola = %s
+                    WHERE municipios = %s AND nameVar = %s AND yearM = %s
+                    """,
+                    (record.valor, record.fuente, codigo_divipola, record.entidad_territorial, record.variable, record.anio),
+                )
             if cur.rowcount > 0:
                 logger.info(f"Actualizado: {record.entidad_territorial} / {record.variable} / {record.anio}")
                 return "actualizado"
