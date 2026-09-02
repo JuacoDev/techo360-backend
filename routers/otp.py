@@ -1,12 +1,25 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, EmailStr
 
 from services.otp_service import (
     OTPCooldownError,
     OTPInvalidError,
+    OTPRateLimitError,
     OTPTooManyAttemptsError,
     otp_service,
 )
+
+
+def _obtener_ip_cliente(request: Request) -> str:
+    """X-Forwarded-For primero (la IP real del usuario, si hay un proxy
+    reenviando -- ver nginx.conf en techo360-frontend, location /api/ y
+    /auth/ ya lo hacen); si no viene, cae a la IP directa de la conexion.
+    request.client.host solo, sin esto, daria siempre la IP del propio
+    contenedor de nginx en produccion, no la del usuario real."""
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "desconocida"
 
 router = APIRouter(
     prefix="/otp",
@@ -37,15 +50,25 @@ class OTPResponse(BaseModel):
     description="Genera y envía un nuevo código OTP al correo indicado.",
     responses={
         429: {
-            "description": "Debe esperar antes de solicitar otro código OTP."
+            "description": (
+                "Debe esperar antes de solicitar otro código OTP, o superó "
+                "el límite de solicitudes desde su IP en la ventana actual."
+            )
         }
     }
 )
-async def request_otp(payload: RequestOTPRequest):
+async def request_otp(payload: RequestOTPRequest, request: Request):
     try:
         await otp_service.request_otp(
             payload.email,
-            payload.name
+            payload.name,
+            ip=_obtener_ip_cliente(request),
+        )
+
+    except OTPRateLimitError as e:
+        raise HTTPException(
+            status_code=429,
+            detail=str(e)
         )
 
     except OTPCooldownError as e:

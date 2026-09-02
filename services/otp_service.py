@@ -23,10 +23,30 @@ OTP_LENGTH = 6
 MAX_VERIFY_ATTEMPTS = 5
 RESEND_COOLDOWN_SECONDS = 60       # no permitir reenviar antes de 60s
 
+# El cooldown de arriba es POR CORREO -- no evita que la misma IP pida OTP
+# para muchos correos distintos (o el mismo, cada 60s sostenido) y agote
+# el cupo diario COMPARTIDO de Brevo (300/dia, ver email_service.py) antes
+# que nadie mas pueda recibir un correo real. Limite adicional por IP:
+# 10 solicitudes cada 15 minutos es generoso para un usuario legitimo
+# (pedir + reintentar un par de veces si no le llego o se equivoco no
+# se acerca a 10), pero acota el peor caso de una sola IP a 40/hora --
+# muy por debajo del cupo diario compartido, sin necesitar autenticacion
+# (este endpoint es pre-login a proposito).
+IP_RATE_LIMIT_MAX = 10
+IP_RATE_LIMIT_WINDOW_SECONDS = 15 * 60
+
 
 class OTPTooManyAttemptsError(Exception):
     """Se agotaron los intentos de verificacion para este codigo."""
     pass
+
+
+class OTPRateLimitError(Exception):
+    """Se supero el limite de solicitudes de OTP desde esta IP en la ventana de tiempo."""
+
+    def __init__(self, seconds_remaining: int):
+        self.seconds_remaining = seconds_remaining
+        super().__init__(f"Demasiadas solicitudes de OTP desde esta IP. Espera {seconds_remaining}s.")
 
 
 class OTPInvalidError(Exception):
@@ -55,11 +75,35 @@ class OTPService:
     def _cooldown_key(self, email: str) -> str:
         return f"otp:{email}:cooldown"
 
+    def _ip_rate_limit_key(self, ip: str) -> str:
+        return f"otp:ip_limit:{ip}"
+
     def _generate_code(self) -> str:
         return "".join(random.choices(string.digits, k=OTP_LENGTH))
 
-    async def request_otp(self, email: str, to_name: str = "") -> None:
-        """Genera un OTP nuevo, lo guarda en Redis, y lo envia por correo."""
+    async def _check_ip_rate_limit(self, ip: str) -> None:
+        """Mismo mecanismo (INCR + EXPIRE en el primer hit) que ya usa
+        email_service._check_and_increment_quota() para el cupo diario --
+        ventana fija, no deslizante, suficiente para este caso."""
+        key = self._ip_rate_limit_key(ip)
+        count = await self._redis.incr(key)
+        if count == 1:
+            await self._redis.expire(key, IP_RATE_LIMIT_WINDOW_SECONDS)
+
+        if count > IP_RATE_LIMIT_MAX:
+            ttl_remaining = await self._redis.ttl(key)
+            raise OTPRateLimitError(ttl_remaining if ttl_remaining > 0 else IP_RATE_LIMIT_WINDOW_SECONDS)
+
+    async def request_otp(self, email: str, to_name: str = "", ip: str | None = None) -> None:
+        """Genera un OTP nuevo, lo guarda en Redis, y lo envia por correo.
+
+        `ip` es opcional (None si el router no la pudo determinar) para no
+        romper la firma si algun dia se llama este metodo desde otro lugar
+        sin contexto de request HTTP -- pero el router SIEMPRE la pasa en
+        el uso real."""
+        if ip:
+            await self._check_ip_rate_limit(ip)
+
         cooldown_key = self._cooldown_key(email)
         ttl_remaining = await self._redis.ttl(cooldown_key)
         if ttl_remaining and ttl_remaining > 0:
