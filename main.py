@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from core.config import settings
 from ingestion.scheduler import iniciar_scheduler
-from routers import auth, email, health, otp, usuarios, zonas
+from routers import auth, health, otp, usuarios, zonas
 from services.email_service import email_service
 
 app = FastAPI(
@@ -29,7 +29,6 @@ app.add_middleware(
 
 # Routers
 app.include_router(health.router)
-app.include_router(email.router)
 app.include_router(otp.router)
 app.include_router(zonas.router)
 app.include_router(usuarios.router)

@@ -5,6 +5,8 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from db.session import get_db
+from models.mapcalor_user import MapCalorUser
+from routers.auth import get_current_user
 from schemas.zonas import GeoJSONFeatureCollection
 
 
@@ -46,6 +48,9 @@ ANIO_DEFAULT = 2024
         200: {
             "description": "Zonas obtenidas correctamente."
         },
+        401: {
+            "description": "Requiere sesión iniciada -- envíe el token en el header Authorization: Bearer <token>."
+        },
         422: {
             "description": "El parámetro nivel no tiene un valor válido."
         },
@@ -69,7 +74,13 @@ def obtener_zonas(
             "ese año, su valor sale null (no es un error)."
         )
     ),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    # Requiere login (decision de producto, no solo el chatbot -- toda la
+    # app necesita cuenta: trazabilidad de usuarios, logs, vinculo con
+    # historial del chatbot). Sin sistema de roles todavia -- cualquier
+    # usuario autenticado puede consultar, sin distincion de tipo (eso
+    # queda para un futuro panel de administrador, fuera de este cambio).
+    current_user: MapCalorUser = Depends(get_current_user)
 ):
     if nivel == "departamento":
         query = text("""
