@@ -10,3 +10,4 @@ apscheduler
 PyJWT
 passlib[bcrypt]
 geoalchemy2
+apscheduler==3.10.4

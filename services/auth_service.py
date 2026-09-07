@@ -59,3 +59,20 @@ def autenticar_usuario(db: Session, identifier: str, password: str):
         return None
 
     return usuario
+
+def registrar_usuario(db: Session, correo: str, namevar: str, password: str):
+    existente = db.query(MapCalorUser).filter(
+        or_(MapCalorUser.correo == correo, MapCalorUser.namevar == namevar)
+    ).first()
+    if existente:
+        return None
+
+    nuevo = MapCalorUser(
+        correo=correo,
+        namevar=namevar,
+        passwordvar=password  # guardado en texto plano
+    )
+    db.add(nuevo)
+    db.commit()
+    db.refresh(nuevo)
+    return nuevo
