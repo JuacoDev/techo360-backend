@@ -14,7 +14,7 @@ from schemas.auth import (
 
 from db.session import get_db
 from models.mapcalor_user import MapCalorUser
-from services.auth_service import autenticar_usuario
+from services.auth_service import autenticar_usuario, hashear_password
 from core.config import settings
 
 
@@ -122,7 +122,7 @@ def register(datos: RegisterRequest, db: Session = Depends(get_db)):
     nuevo_usuario = MapCalorUser(
         correo=datos.correo,
         namevar=datos.namevar,
-        passwordvar=datos.password
+        passwordvar=hashear_password(datos.password)
     )
 
     db.add(nuevo_usuario)

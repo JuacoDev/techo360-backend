@@ -8,6 +8,6 @@ redis
 pydantic[email]
 apscheduler
 PyJWT
-passlib[bcrypt]
+bcrypt==5.0.0
 geoalchemy2
 apscheduler==3.10.4
