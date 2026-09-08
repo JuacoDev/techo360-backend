@@ -140,6 +140,32 @@ def obtener_zonas(
                         else None
                     ),
                 }
+        else:  # último valor disponible para departamentos
+            query_indicadores_depto = text("""
+                SELECT DISTINCT ON (zm.codigo_departamento, m.namevar)
+                       zm.codigo_departamento,
+                       m.namevar,
+                       m.valuevar,
+                       m.originvar,
+                       m.yearm
+                FROM public.mapcalordb m
+                JOIN zonas_municipio zm ON m.codigodivipola = zm.codigo_municipio
+                WHERE m.namevar = ANY(:variables)
+                  AND zm.codigo_departamento IS NOT NULL
+                ORDER BY zm.codigo_departamento, m.namevar, m.yearm DESC
+            """)
+            filas_indicadores_depto = db.execute(
+                query_indicadores_depto, {"variables": VARIABLES_INDICADORES}
+            ).mappings().all()
+
+            for fila in filas_indicadores_depto:
+                codigo = fila["codigo_departamento"]
+                indicadores_por_codigo.setdefault(codigo, {})[fila["namevar"]] = {
+                    "valor": float(fila["valuevar"]) if fila["valuevar"] is not None else None,
+                    "origen": fila["originvar"],
+                    "intervalo_confianza": None,
+                    "anio_real": fila["yearm"]
+                }
 
         features = []
 
@@ -150,33 +176,24 @@ def obtener_zonas(
             }
 
             if nivel == "municipio":
-                properties["codigo_departamento"] = (
-                    zona["codigo_departamento"]
-                )
+                properties["codigo_departamento"] = zona["codigo_departamento"]
                 properties["anio"] = anio
-
-                # zona["codigo"] == "00000" (Area en Litigio Cauca-Huila)
-                # nunca tiene fila en MapCalorDB -- indicadores_por_codigo
-                # simplemente no tiene esa clave, y el .get(...) de abajo
-                # cae al default de 3 campos null para las 7 variables,
-                # sin caso especial adicional.
                 indicadores_zona = indicadores_por_codigo.get(zona["codigo"], {})
-                properties["indicadores"] = {
-                    variable: indicadores_zona.get(
-                        variable,
-                        {"valor": None, "origen": None, "intervalo_confianza": None},
-                    )
-                    for variable in VARIABLES_INDICADORES
-                }
+            else:
+                properties["anio"] = anio
+                indicadores_zona = indicadores_por_codigo.get(zona["codigo"], {})
+
+            # Aquí usamos indicadores_por_codigo en ambos casos
+            properties["indicadores"] = {
+                variable: indicadores_zona.get(
+                    variable,
+                    {"valor": None, "origen": None, "intervalo_confianza": None, "anio_real": None},
+                )
+                for variable in VARIABLES_INDICADORES
+            }
 
             features.append({
                 "type": "Feature",
-                # ST_AsGeoJSON() devuelve TEXT, no un dict -- sin este
-                # json.loads(), la respuesta nunca pasaba la validacion
-                # de GeoJSONFeature.geometry (dict[str, Any]), bug
-                # preexistente detectado al probar este endpoint en vivo
-                # por primera vez (30/31-ago-2026), no introducido por
-                # el cambio de indicadores/anio de esta tarea.
                 "geometry": json.loads(zona["geometry"]),
                 "properties": properties
             })

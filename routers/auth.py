@@ -22,9 +22,6 @@ router = APIRouter(
     prefix="/auth",
     tags=["auth"]
 )
-
-
-    
 # -------------------
 # Configuración de OAuth2
 # -------------------
@@ -132,10 +129,15 @@ def register(datos: RegisterRequest, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(nuevo_usuario)
 
+    token = crear_access_token(nuevo_usuario.id, nuevo_usuario.correo, nuevo_usuario.namevar)
+
     return {
         "message": "Usuario registrado correctamente",
-        "id": nuevo_usuario.id
+        "id": nuevo_usuario.id,
+        "access_token": token,
+        "token_type": "bearer"
     }
+
 
 # -------------------
 # Dependencia para validar token
