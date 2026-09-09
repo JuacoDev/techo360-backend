@@ -50,18 +50,32 @@ def main(dry_run: bool) -> int:
             print("Nada que hacer.")
             return 0
 
-        for usuario in pendientes:
-            print(f"  - id={usuario.id} correo={usuario.correo!r} namevar={usuario.namevar!r}")
-            if not dry_run:
-                usuario.passwordvar = hashear_password(usuario.passwordvar.strip())
-
         if dry_run:
+            for usuario in pendientes:
+                print(f"  - id={usuario.id} correo={usuario.correo!r} namevar={usuario.namevar!r}")
             print("\n--dry-run: no se escribio nada en la base de datos.")
             return 0
 
-        db.commit()
-        print(f"\nMigrados {len(pendientes)} usuarios. Confirmado con commit.")
-        return 0
+        # Un commit POR FILA, no uno solo al final -- si hashear_password()
+        # o el commit fallan para un usuario puntual, esa fila queda sin
+        # migrar (logueada como error) pero no arrastra abajo a las demas
+        # que ya se procesaron bien. rollback() acota el daño de la fila
+        # fallida a su propia transaccion antes de seguir con la siguiente.
+        migrados = 0
+        errores = 0
+        for usuario in pendientes:
+            try:
+                usuario.passwordvar = hashear_password(usuario.passwordvar.strip())
+                db.commit()
+                migrados += 1
+                print(f"  OK id={usuario.id} correo={usuario.correo!r} namevar={usuario.namevar!r}")
+            except Exception as exc:
+                db.rollback()
+                errores += 1
+                print(f"  ERROR id={usuario.id} correo={usuario.correo!r}: {exc!r}")
+
+        print(f"\nMigrados: {migrados}. Errores: {errores}. Total procesados: {len(pendientes)}.")
+        return 1 if errores else 0
     finally:
         db.close()
 
