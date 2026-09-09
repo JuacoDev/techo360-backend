@@ -31,6 +31,7 @@ class IndicadorRecord:
     valor: float
     anio: int
     fuente: str                # de donde vino el dato (ej. "TerriData", "FNA")
+    intervalo_confianza: float | None = None  # solo para filas de relleno/proyeccion -- ver aviso en ingestion/db.py
 
 
 @dataclass

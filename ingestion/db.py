@@ -152,12 +152,43 @@ resuelve la coincidencia igual sin importar como se escriban.
 >>>       eran. Sigue reservado para el dia en que una variable tenga de
 >>>       verdad 2+ años reales distintos que interpolar.
 >>>   "SAE-censo2018" -- Small Area Estimation con covariables del censo
->>>       2018. Reservado para deficit_habitacional_cuantitativo/
->>>       cualitativo (Pieza 3, prompt separado, todavia no
->>>       implementado) -- las 34 filas reales de estas variables son
->>>       agregados DEPARTAMENTALES (0 municipios), asi que aqui SAE no
->>>       es opcional: es el unico metodo que puede bajar un dato
->>>       departamental a nivel municipio.
+>>>       2018. NOTA 2026-09-09: este parrafo describia un estado viejo
+>>>       (34 filas departamentales de TerriData) que ya no es cierto --
+>>>       DaneDeficitAdapter (ver ingestion/dane_deficit_adapter.py)
+>>>       reemplazo esas 34 filas por 1,122 filas MUNICIPALES reales
+>>>       (yearm=2018, codigoDivipola real, confirmado en vivo). Por eso
+>>>       SAE real ya NO hacia falta para bajar de departamento a
+>>>       municipio -- ver "proyeccion-tendencia-nacional-2018-2024"
+>>>       abajo, que extrapola esa base municipal real hacia 2024 con una
+>>>       tasa nacional simple, sin necesitar SAE. Esta entrada queda
+>>>       reservada por si en el futuro hiciera falta bajar un dato que
+>>>       SOLO exista a nivel departamental o nacional.
+>>>
+>>>   "proyeccion-tendencia-nacional-2018-2024" (agregado 2026-09-09,
+>>>       ver ingestion/proyeccion_2024.py) -- deficit_habitacional_
+>>>       cuantitativo/cualitativo/total no tienen ninguna fuente
+>>>       municipal real para 2024 (DANE solo actualiza el deficit via la
+>>>       ECV, que no baja de nivel departamental/regional -- confirmado,
+>>>       no asumido). Se extrapola el valor municipal REAL de 2018 (el
+>>>       de DaneDeficitAdapter) aplicando la tasa de cambio NACIONAL
+>>>       2018->2024 de cada componente (CNPV 2018 vs ECV 2024, ambos
+>>>       DANE) de forma proporcional. Fiabilidad media-alta (parte de un
+>>>       dato municipal real, solo extrapola la tendencia) -- ver el
+>>>       modulo de proyeccion para la formula exacta y el aviso sobre
+>>>       por que el componente cuantitativo sube en vez de bajar
+>>>       (CNPV censo vs ECV encuesta no son perfectamente comparables).
+>>>
+>>>   "proyeccion-snapshot-2026" (agregado 2026-09-09) -- para
+>>>       tenencia_informal_terrenos: no existe NINGUN punto de
+>>>       referencia municipal anterior a 2026 para esta variable
+>>>       especifica (investigado: el CNPV 2018 no publica un anexo
+>>>       estatico de tenencia de vivienda a nivel municipal, es un
+>>>       sistema de consulta interactivo REDATAM sin archivo descargable
+>>>       -- no se pudo confirmar con el nivel de certeza que este
+>>>       proyecto exige). Sin un segundo punto real, no hay tendencia
+>>>       honesta que calcular -- se reutiliza el snapshot 2026 tal cual
+>>>       para 2024, con fiabilidad BAJA (es el mismo dato de hoy, no una
+>>>       medicion de 2024).
 >>>   "LightGBM-proyeccion" -- reservado para cuando un modelo entrenado
 >>>       SI demuestre superar su baseline ingenuo correspondiente (ej.
 >>>       si densidad_poblacional alguna vez necesitara proyeccion mas
@@ -207,19 +238,19 @@ def guardar_indicador(database_url: str, record: IndicadorRecord) -> str:
                 cur.execute(
                     """
                     UPDATE MapCalorDB
-                    SET valueVar = %s, originVar = %s, municipios = %s
+                    SET valueVar = %s, originVar = %s, municipios = %s, intervaloConfianza = %s
                     WHERE codigoDivipola = %s AND nameVar = %s AND yearM = %s
                     """,
-                    (record.valor, record.fuente, record.entidad_territorial, codigo_divipola, record.variable, record.anio),
+                    (record.valor, record.fuente, record.entidad_territorial, record.intervalo_confianza, codigo_divipola, record.variable, record.anio),
                 )
             else:
                 cur.execute(
                     """
                     UPDATE MapCalorDB
-                    SET valueVar = %s, originVar = %s, codigoDivipola = %s
+                    SET valueVar = %s, originVar = %s, codigoDivipola = %s, intervaloConfianza = %s
                     WHERE municipios = %s AND nameVar = %s AND yearM = %s
                     """,
-                    (record.valor, record.fuente, codigo_divipola, record.entidad_territorial, record.variable, record.anio),
+                    (record.valor, record.fuente, codigo_divipola, record.intervalo_confianza, record.entidad_territorial, record.variable, record.anio),
                 )
             if cur.rowcount > 0:
                 logger.info(f"Actualizado: {record.entidad_territorial} / {record.variable} / {record.anio}")
@@ -227,10 +258,10 @@ def guardar_indicador(database_url: str, record: IndicadorRecord) -> str:
 
             cur.execute(
                 """
-                INSERT INTO MapCalorDB (municipios, nameVar, valueVar, yearM, originVar, codigoDivipola)
-                VALUES (%s, %s, %s, %s, %s, %s)
+                INSERT INTO MapCalorDB (municipios, nameVar, valueVar, yearM, originVar, codigoDivipola, intervaloConfianza)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
                 """,
-                (record.entidad_territorial, record.variable, record.valor, record.anio, record.fuente, codigo_divipola),
+                (record.entidad_territorial, record.variable, record.valor, record.anio, record.fuente, codigo_divipola, record.intervalo_confianza),
             )
             logger.info(f"Insertado: {record.entidad_territorial} / {record.variable} / {record.anio}")
             return "insertado"
