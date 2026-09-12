@@ -32,9 +32,12 @@ VARIABLES_INDICADORES = [
 
 ANIO_DEFAULT = 2024
 
-# Las 3 variables que entran al score compuesto de privacion/viabilidad
-# (Alkire-Foster / IPM adaptado, sin el umbral k=33% oficial -- aqui es
-# un promedio simple de 3 componentes con peso igual 1/3 cada uno).
+# Las 3 variables que entran al score compuesto de privacion (expuesto
+# como score_privacion -- "Score_privación" en el documento de
+# metodologia, sin tilde/mayuscula aqui por consistencia con el resto
+# de nombres de campo de la API). Alkire-Foster / IPM adaptado, sin el
+# umbral k=33% oficial -- aqui es un promedio simple de 3 componentes
+# con peso igual 1/3 cada uno.
 # Acueducto y alcantarillado se INVIERTEN (1 - normalizado) porque mas
 # cobertura = menos privacion; deficit_habitacional_total ya viene en
 # la direccion correcta (mas deficit = mas privacion), no se invierte.
@@ -54,7 +57,7 @@ def _normalizar_minmax(valor: float | None, minimo: float | None, maximo: float 
     return round((valor - minimo) / (maximo - minimo), 4)
 
 
-def _score_viabilidad(indicadores_zona: dict) -> float | None:
+def _score_privacion(indicadores_zona: dict) -> float | None:
     """Score compuesto de privacion (0=mejor, 1=peor), promedio simple
     1/3 + 1/3 + 1/3 de acueducto invertido, alcantarillado invertido, y
     deficit habitacional total (sin invertir). None si falta cualquiera
@@ -264,13 +267,13 @@ def obtener_zonas(
             }
 
             if nivel == "municipio":
-                # Score compuesto de privacion/viabilidad (T-49) -- None
+                # Score compuesto de privacion (T-49) -- None
                 # para MpCodigo=00000 (Area en Litigio) de forma natural,
                 # ya que esa zona no tiene score_normalizado en ninguna
                 # de las 3 variables que entran al compuesto. Solo se
                 # calcula a nivel municipio (el choropleth del mapa es
                 # a este nivel; departamento no lo necesita hoy).
-                properties["score_viabilidad"] = _score_viabilidad(properties["indicadores"])
+                properties["score_privacion"] = _score_privacion(properties["indicadores"])
 
             features.append({
                 "type": "Feature",
