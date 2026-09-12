@@ -32,6 +32,44 @@ VARIABLES_INDICADORES = [
 
 ANIO_DEFAULT = 2024
 
+# Las 3 variables que entran al score compuesto de privacion/viabilidad
+# (Alkire-Foster / IPM adaptado, sin el umbral k=33% oficial -- aqui es
+# un promedio simple de 3 componentes con peso igual 1/3 cada uno).
+# Acueducto y alcantarillado se INVIERTEN (1 - normalizado) porque mas
+# cobertura = menos privacion; deficit_habitacional_total ya viene en
+# la direccion correcta (mas deficit = mas privacion), no se invierte.
+# densidad_poblacional queda fuera a proposito -- es ponderador visual
+# de tamaño/opacidad en el frontend, no se mezcla en el color del mapa.
+VARIABLE_ACUEDUCTO = "cobertura_acueducto"
+VARIABLE_ALCANTARILLADO = "cobertura_alcantarillado"
+VARIABLE_DEFICIT_COMPUESTO = "deficit_habitacional_total"
+
+
+def _normalizar_minmax(valor: float | None, minimo: float | None, maximo: float | None) -> float | None:
+    """Normalizacion min-max a [0, 1]. None si falta cualquier insumo o
+    si el rango es degenerado (todas las filas con el mismo valor -- no
+    hay forma de normalizar sin inventar un 0 u 1 arbitrario)."""
+    if valor is None or minimo is None or maximo is None or maximo == minimo:
+        return None
+    return round((valor - minimo) / (maximo - minimo), 4)
+
+
+def _score_viabilidad(indicadores_zona: dict) -> float | None:
+    """Score compuesto de privacion (0=mejor, 1=peor), promedio simple
+    1/3 + 1/3 + 1/3 de acueducto invertido, alcantarillado invertido, y
+    deficit habitacional total (sin invertir). None si falta cualquiera
+    de los 3 insumos -- incluye el caso MpCodigo=00000 (Area en Litigio
+    Cauca-Huila), que no tiene fila real en mapcalordb para ninguna
+    variable, asi que cae aqui de forma natural sin caso especial."""
+    acueducto = indicadores_zona.get(VARIABLE_ACUEDUCTO, {}).get("score_normalizado")
+    alcantarillado = indicadores_zona.get(VARIABLE_ALCANTARILLADO, {}).get("score_normalizado")
+    deficit = indicadores_zona.get(VARIABLE_DEFICIT_COMPUESTO, {}).get("score_normalizado")
+
+    if acueducto is None or alcantarillado is None or deficit is None:
+        return None
+
+    return round((1 - acueducto) / 3 + (1 - alcantarillado) / 3 + deficit / 3, 4)
+
 
 @router.get(
     "",
@@ -123,10 +161,31 @@ def obtener_zonas(
                 query_indicadores, {"anio": anio, "variables": VARIABLES_INDICADORES}
             ).mappings().all()
 
+            # Min-max por variable, calculado sobre TODAS las filas de
+            # filas_indicadores (las 1,105 zonas reales del año pedido,
+            # sin paginar ni filtrar) -- nunca sobre un subconjunto, para
+            # que el score_normalizado sea comparable entre municipios.
+            # MpCodigo=00000 no tiene fila aqui (mapcalordb no tiene
+            # datos para ese codigo), asi que queda fuera del min-max
+            # de forma natural, sin caso especial.
+            valores_por_variable: dict[str, list[float]] = {v: [] for v in VARIABLES_INDICADORES}
+            for fila in filas_indicadores:
+                if fila["valuevar"] is not None:
+                    valores_por_variable[fila["namevar"]].append(float(fila["valuevar"]))
+
+            minmax_por_variable: dict[str, tuple[float | None, float | None]] = {
+                variable: (min(valores), max(valores)) if valores else (None, None)
+                for variable, valores in valores_por_variable.items()
+            }
+
             for fila in filas_indicadores:
                 codigo = fila["codigodivipola"]
-                indicadores_por_codigo.setdefault(codigo, {})[fila["namevar"]] = {
-                    "valor": float(fila["valuevar"]) if fila["valuevar"] is not None else None,
+                variable = fila["namevar"]
+                valor = float(fila["valuevar"]) if fila["valuevar"] is not None else None
+                minimo, maximo = minmax_por_variable.get(variable, (None, None))
+
+                indicadores_por_codigo.setdefault(codigo, {})[variable] = {
+                    "valor": valor,
                     # Se expone el originVar real (ej. "TerriData",
                     # "ultimo-valor-observado", "DANE-CNPV2018"), no un
                     # generico "estimado" -- el frontend necesita poder
@@ -139,6 +198,12 @@ def obtener_zonas(
                         if fila["intervaloconfianza"] is not None
                         else None
                     ),
+                    # Normalizacion min-max [0,1] de esta variable sola
+                    # (T-49): permite al frontend pintar el choropleth
+                    # por UNA variable elegida por el usuario, en vez
+                    # del score compuesto. NO invertida -- es el valor
+                    # crudo reescalado, sin semantica de "privacion".
+                    "score_normalizado": _normalizar_minmax(valor, minimo, maximo),
                 }
         else:  # último valor disponible para departamentos
             query_indicadores_depto = text("""
@@ -187,10 +252,25 @@ def obtener_zonas(
             properties["indicadores"] = {
                 variable: indicadores_zona.get(
                     variable,
-                    {"valor": None, "origen": None, "intervalo_confianza": None, "anio_real": None},
+                    {
+                        "valor": None,
+                        "origen": None,
+                        "intervalo_confianza": None,
+                        "anio_real": None,
+                        "score_normalizado": None,
+                    },
                 )
                 for variable in VARIABLES_INDICADORES
             }
+
+            if nivel == "municipio":
+                # Score compuesto de privacion/viabilidad (T-49) -- None
+                # para MpCodigo=00000 (Area en Litigio) de forma natural,
+                # ya que esa zona no tiene score_normalizado en ninguna
+                # de las 3 variables que entran al compuesto. Solo se
+                # calcula a nivel municipio (el choropleth del mapa es
+                # a este nivel; departamento no lo necesita hoy).
+                properties["score_viabilidad"] = _score_viabilidad(properties["indicadores"])
 
             features.append({
                 "type": "Feature",
