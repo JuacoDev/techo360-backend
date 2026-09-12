@@ -32,6 +32,19 @@ VARIABLES_INDICADORES = [
 
 ANIO_DEFAULT = 2024
 
+# '01001' ('Colombia') es el agregado NACIONAL que TerriData mezcla con
+# las filas de municipio real para densidad_poblacional/cobertura_
+# acueducto/cobertura_alcantarillado -- confirmado en vivo (set-diff
+# mapcalordb vs GeoJSON de municipios, sep-2026): 75 filas, años
+# 2000-2042. No es un municipio ni tiene poligono en el GeoJSON.
+#
+# Se filtra ACA (ademas de en ingestion/terridata_adapter.py, ver
+# _es_agregado_nacional() ahi) como defensa en profundidad: este WHERE
+# protege cualquier consumidor de GET /api/zonas contra las 75 filas ya
+# existentes en mapcalordb HOY (el fix del ingestor solo evita que se
+# reintroduzca en una carga futura, no limpia lo que ya esta guardado).
+CODIGO_AGREGADO_NACIONAL_TERRIDATA = "01001"
+
 # Las 3 variables que entran al score compuesto de privacion (expuesto
 # como score_privacion -- "Score_privación" en el documento de
 # metodologia, sin tilde/mayuscula aqui por consistencia con el resto
@@ -159,9 +172,15 @@ def obtener_zonas(
                 WHERE yearm = :anio
                   AND namevar = ANY(:variables)
                   AND codigodivipola IS NOT NULL
+                  AND codigodivipola != :codigo_agregado_nacional
             """)
             filas_indicadores = db.execute(
-                query_indicadores, {"anio": anio, "variables": VARIABLES_INDICADORES}
+                query_indicadores,
+                {
+                    "anio": anio,
+                    "variables": VARIABLES_INDICADORES,
+                    "codigo_agregado_nacional": CODIGO_AGREGADO_NACIONAL_TERRIDATA,
+                },
             ).mappings().all()
 
             # Min-max por variable, calculado sobre TODAS las filas de

@@ -61,6 +61,33 @@ def _es_agregado_departamental(codigo_entidad: str) -> bool:
     return len(codigo) == 5 and codigo.endswith("000")
 
 
+def _es_agregado_nacional(codigo_entidad: str) -> bool:
+    """True si la fila es el TOTAL NACIONAL ('Entidad'='Colombia'), no
+    un municipio real -- confirmado en vivo (30/31-ago-2026, y de nuevo
+    al diagnosticar la discrepancia 1,105 vs 1,123 municipios del
+    choropleth, sep-2026): TerriData usa 'Código Entidad'='01001' para
+    esta fila, en las 3 variables que salen de este adaptador
+    (densidad_poblacional, cobertura_acueducto, cobertura_alcantarillado).
+
+    Es un patron DISTINTO al de _es_agregado_departamental() de arriba
+    (que detecta 'terminado en 000', ej. 05000/15000/50000) -- '01001'
+    no termina en '000' y no coincide con ningun departamento real de
+    Colombia (no existe el departamento '01'), asi que se escapaba de
+    ese filtro sin ser detectado. Se colo hasta mapcalordb (75 filas,
+    años 2000-2042 incluyendo proyecciones) hasta que se encontro al
+    hacer el set-diff entre mapcalordb y el GeoJSON de municipios --
+    causaba que GET /api/zonas devolviera un "municipio" fantasma
+    llamado 'Colombia' con codigo '01001', sin poligono real, que
+    ademas participaba en el min-max de normalizacion del choropleth
+    (T-49) sin ser un dato municipal valido.
+
+    Se filtra por CODIGO (no por el nombre 'Entidad'='Colombia') porque
+    el codigo es exacto y estable, mientras que el nombre paso por
+    encoding con errors='replace' en _iterar_filas_dimension() y podria
+    no comparar igual en todos los casos."""
+    return (codigo_entidad or "").strip() == "01001"
+
+
 def _parsear_numero_terridata(valor_crudo) -> float:
     """TerriData usa formato numerico espanol: '.' como separador de
     miles, ',' como separador decimal (ej. '2.905,04' == 2905.04).
@@ -229,6 +256,7 @@ class TerriDataAdapter(DataSourceAdapter):
                 raise ValueError(f"'{var_interna}' no esta mapeada en MAPEO_DIMENSIONES.")
 
             agregados_departamentales_excluidos = 0
+            agregados_nacionales_excluidos = 0
             valores_no_parseables = 0
             registros_var = 0
 
@@ -261,6 +289,9 @@ class TerriDataAdapter(DataSourceAdapter):
                 codigo = fila.get("Código Entidad", "").strip()
                 if _es_agregado_departamental(codigo):
                     agregados_departamentales_excluidos += 1
+                    continue
+                if _es_agregado_nacional(codigo):
+                    agregados_nacionales_excluidos += 1
                     continue
 
                 try:
@@ -305,6 +336,11 @@ class TerriDataAdapter(DataSourceAdapter):
                     f"'{var_interna}': {agregados_departamentales_excluidos} fila(s) excluidas por ser "
                     f"agregado departamental (Codigo Entidad terminado en '000', no un municipio real) -- "
                     f"{registros_var} registro(s) de municipio real conservados."
+                )
+            if agregados_nacionales_excluidos:
+                logger.info(
+                    f"'{var_interna}': {agregados_nacionales_excluidos} fila(s) excluidas por ser "
+                    f"el agregado nacional (Codigo Entidad='01001', Entidad='Colombia', no un municipio real)."
                 )
             if valores_no_parseables:
                 logger.warning(
