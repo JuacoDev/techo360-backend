@@ -138,13 +138,26 @@ resuelve la coincidencia igual sin importar como se escriban.
 >>> reflejar esto (una sola año disponible), no inventar mas relleno.
 >>>
 >>> Valores de originVar para relleno (esquema de procedencia, Sprint 3):
->>>   "ultimo-valor-observado" -- baseline ingenuo (repetir el ultimo
->>>       valor real conocido). Usado para cobertura_acueducto/
->>>       cobertura_alcantarillado 2025-2026 (decision del 30-ago:
->>>       el LightGBM entrenado para estas dos variables especificas
->>>       queda PEOR que este mismo baseline en el set de test real ya
->>>       documentado -- no es defendible usar a proposito el metodo que
->>>       ya se sabe que es peor solo porque tambien es "un modelo").
+>>>   "proyeccion-ultimo-valor-observado-{anio}" (renombrado 22-sep-2026,
+>>>       ver ingestion/reetiquetar_ultimo_valor_observado.py -- ANTES
+>>>       "ultimo-valor-observado" sin prefijo, inconsistente con el
+>>>       resto del esquema y sin el prefijo "proyeccion-" que el
+>>>       frontend usa para clasificar la tarjeta como proyeccion en vez
+>>>       de fuente confirmada) -- baseline ingenuo (repetir el ultimo
+>>>       valor real conocido, sin ajuste). Usado para cobertura_acueducto/
+>>>       cobertura_alcantarillado 2025-2026, ambos anclados a {anio}=2024
+>>>       (decision del 30-ago-2026: el LightGBM entrenado para estas dos
+>>>       variables especificas queda PEOR que este mismo baseline en el
+>>>       set de test real ya documentado -- no es defendible usar a
+>>>       proposito el metodo que ya se sabe que es peor solo porque
+>>>       tambien es "un modelo"). Fiabilidad DINAMICA segun antiguedad
+>>>       (no un numero fijo como las otras dos proyecciones de abajo):
+>>>       fiabilidad = max(30, 60 - 10*(antiguedad-1)), antiguedad =
+>>>       yearm - anio_del_dato_real. Hoy: 60% para yearm=2025, 50% para
+>>>       yearm=2026 -- ver el docstring completo de
+>>>       ingestion/reetiquetar_ultimo_valor_observado.py para la
+>>>       justificacion de cada parametro de la formula (incluye RMSE
+>>>       real medido a distintas antiguedades, no un numero inventado).
 >>>   "interpolacion-lineal" -- interpolar entre dos puntos reales
 >>>       conocidos. Se intento para tenencia_informal_terrenos
 >>>       2024-2025 (30-ago-2026) pero se revirtio por completo (ver
