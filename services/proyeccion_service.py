@@ -10,7 +10,6 @@ from schemas.proyecciones import PuntoProyeccion
 INDICADOR_VIGENTE = "densidad_poblacional"
 MODELO_VIGENTE = "LightGBM"
 ORIGEN_PROYECCION = "LightGBM-proyeccion"
-HORIZONTE_PROYECCION = 5
 RUTA_MODELO = (
     Path(__file__).resolve().parents[1]
     / "models"
@@ -27,6 +26,10 @@ class ModeloNoDisponibleError(RuntimeError):
 
 
 class ContratoModeloNoConfiguradoError(RuntimeError):
+    pass
+
+
+class RangoProyeccionInvalidoError(ValueError):
     pass
 
 
@@ -84,10 +87,17 @@ def calcular_proyeccion(
     db: Session,
     codigo_municipio: str,
     indicador: str,
+    desde: int,
+    hasta: int,
 ) -> list[PuntoProyeccion]:
     if indicador != INDICADOR_VIGENTE:
         raise IndicadorNoSoportadoError(
             f"El indicador soportado es '{INDICADOR_VIGENTE}'."
+        )
+
+    if desde > hasta:
+        raise RangoProyeccionInvalidoError(
+            "El año inicial no puede ser mayor que el año final."
         )
 
     datos_historicos = obtener_datos_historicos(
@@ -99,11 +109,14 @@ def calcular_proyeccion(
     if not datos_historicos:
         raise LookupError("No existen datos para el municipio.")
 
-    modelo = cargar_modelo()
     ultimo_anio = max(int(fila["yearm"]) for fila in datos_historicos)
-    anios_futuros = list(
-        range(ultimo_anio + 1, ultimo_anio + HORIZONTE_PROYECCION + 1)
-    )
+    if desde <= ultimo_anio:
+        raise RangoProyeccionInvalidoError(
+            f"La proyección debe comenzar después de {ultimo_anio}."
+        )
+
+    modelo = cargar_modelo()
+    anios_futuros = list(range(desde, hasta + 1))
     caracteristicas = construir_caracteristicas(
         datos_historicos,
         anios_futuros,

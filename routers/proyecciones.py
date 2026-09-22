@@ -11,6 +11,7 @@ from services.proyeccion_service import (
     MODELO_VIGENTE,
     ORIGEN_PROYECCION,
     ModeloNoDisponibleError,
+    RangoProyeccionInvalidoError,
     calcular_proyeccion,
 )
 
@@ -49,6 +50,16 @@ def obtener_proyeccion_municipio(
         pattern=r"^densidad_poblacional$",
         description="Indicador actualmente soportado.",
     ),
+    desde: int = Query(
+        ...,
+        ge=1,
+        description="Primer año futuro solicitado.",
+    ),
+    hasta: int = Query(
+        ...,
+        ge=1,
+        description="Último año futuro solicitado.",
+    ),
     db: Session = Depends(get_db),
     current_user: MapCalorUser = Depends(get_current_user),
 ):
@@ -57,8 +68,12 @@ def obtener_proyeccion_municipio(
             db,
             codigo_municipio,
             indicador,
+            desde,
+            hasta,
         )
     except IndicadorNoSoportadoError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    except RangoProyeccionInvalidoError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
     except LookupError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
