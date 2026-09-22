@@ -1,12 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy.orm import Session
 
-from db.session import get_db
 from models.mapcalor_user import MapCalorUser
 from routers.auth import get_current_user
 from schemas.proyecciones import ProyeccionResponse
+from services.proyeccion_rpc_client import ProyeccionTimeoutError
 from services.proyeccion_service import (
-    ContratoModeloNoConfiguradoError,
     IndicadorNoSoportadoError,
     MODELO_VIGENTE,
     ORIGEN_PROYECCION,
@@ -35,9 +33,10 @@ router = APIRouter(
         404: {"description": "No existen datos para el municipio."},
         422: {"description": "El código o indicador no son válidos."},
         503: {"description": "El modelo LightGBM no está disponible."},
+        504: {"description": "El servicio de proyección no respondió a tiempo."},
     },
 )
-def obtener_proyeccion_municipio(
+async def obtener_proyeccion_municipio(
     codigo_municipio: str = Query(
         ...,
         min_length=5,
@@ -60,12 +59,10 @@ def obtener_proyeccion_municipio(
         ge=1,
         description="Último año futuro solicitado.",
     ),
-    db: Session = Depends(get_db),
     current_user: MapCalorUser = Depends(get_current_user),
 ):
     try:
-        serie = calcular_proyeccion(
-            db,
+        serie = await calcular_proyeccion(
             codigo_municipio,
             indicador,
             desde,
@@ -77,10 +74,9 @@ def obtener_proyeccion_municipio(
         raise HTTPException(status_code=422, detail=str(error)) from error
     except LookupError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
-    except (
-        ModeloNoDisponibleError,
-        ContratoModeloNoConfiguradoError,
-    ) as error:
+    except ProyeccionTimeoutError as error:
+        raise HTTPException(status_code=504, detail=str(error)) from error
+    except ModeloNoDisponibleError as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
 
     return {

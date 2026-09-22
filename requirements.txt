@@ -11,4 +11,4 @@ PyJWT
 bcrypt==5.0.0
 geoalchemy2
 apscheduler==3.10.4
-lightgbm==4.6.0
+aio-pika==9.4.3

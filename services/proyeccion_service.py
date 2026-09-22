@@ -1,20 +1,20 @@
-from pathlib import Path
-from importlib import import_module
-
-from sqlalchemy import text
-from sqlalchemy.orm import Session
-
 from schemas.proyecciones import PuntoProyeccion
+from services.proyeccion_rpc_client import solicitar_proyeccion
 
 
 INDICADOR_VIGENTE = "densidad_poblacional"
 MODELO_VIGENTE = "LightGBM"
 ORIGEN_PROYECCION = "LightGBM-proyeccion"
-RUTA_MODELO = (
-    Path(__file__).resolve().parents[1]
-    / "models"
-    / "lightgbm_densidad_poblacional.txt"
-)
+
+# Traduce el "tipo" que pone el consumer de techo360-proyeccion en la
+# respuesta de error (ver app/rabbitmq_consumer.py de ese repo) al tipo
+# de excepcion que este router ya sabe mapear a un status HTTP.
+_ERROR_POR_TIPO = {
+    "sin_datos": lambda detail: LookupError(detail),
+    "modelo_no_disponible": lambda detail: ModeloNoDisponibleError(detail),
+    "rango_invalido": lambda detail: RangoProyeccionInvalidoError(detail),
+    "error_interno": lambda detail: ModeloNoDisponibleError(detail),
+}
 
 
 class IndicadorNoSoportadoError(ValueError):
@@ -25,66 +25,11 @@ class ModeloNoDisponibleError(RuntimeError):
     pass
 
 
-class ContratoModeloNoConfiguradoError(RuntimeError):
-    pass
-
-
 class RangoProyeccionInvalidoError(ValueError):
     pass
 
 
-def obtener_datos_historicos(
-    db: Session,
-    codigo_municipio: str,
-    indicador: str,
-):
-    query = text("""
-        SELECT yearm, valuevar
-        FROM public.mapcalordb
-        WHERE codigodivipola = :codigo_municipio
-          AND namevar = :indicador
-          AND valuevar IS NOT NULL
-        ORDER BY yearm
-    """)
-
-    return db.execute(
-        query,
-        {
-            "codigo_municipio": codigo_municipio,
-            "indicador": indicador,
-        },
-    ).mappings().all()
-
-
-def cargar_modelo():
-    if not RUTA_MODELO.exists():
-        raise ModeloNoDisponibleError(
-            "El modelo LightGBM no está disponible."
-        )
-
-    try:
-        lgb = import_module("lightgbm")
-    except ImportError as error:
-        raise ModeloNoDisponibleError(
-            "La dependencia LightGBM no está instalada."
-        ) from error
-
-    try:
-        return lgb.Booster(model_file=str(RUTA_MODELO))
-    except Exception as error:
-        raise ModeloNoDisponibleError(
-            "No se pudo cargar el modelo LightGBM."
-        ) from error
-
-
-def construir_caracteristicas(datos_historicos, anios_futuros: list[int]):
-    raise ContratoModeloNoConfiguradoError(
-        "Las características del modelo LightGBM aún no están configuradas."
-    )
-
-
-def calcular_proyeccion(
-    db: Session,
+async def calcular_proyeccion(
     codigo_municipio: str,
     indicador: str,
     desde: int,
@@ -100,30 +45,27 @@ def calcular_proyeccion(
             "El año inicial no puede ser mayor que el año final."
         )
 
-    datos_historicos = obtener_datos_historicos(
-        db,
-        codigo_municipio,
-        indicador,
-    )
+    payload = {
+        "codigo_municipio": codigo_municipio,
+        "indicador": indicador,
+        "anio_fin": hasta,
+    }
 
-    if not datos_historicos:
-        raise LookupError("No existen datos para el municipio.")
+    respuesta = await solicitar_proyeccion(payload)
 
-    ultimo_anio = max(int(fila["yearm"]) for fila in datos_historicos)
-    if desde <= ultimo_anio:
+    if respuesta.get("status") != "ok":
+        detail = respuesta.get("detail") or "El modelo LightGBM no está disponible."
+        error_factory = _ERROR_POR_TIPO.get(respuesta.get("tipo"), ModeloNoDisponibleError)
+        raise error_factory(detail)
+
+    anio_inicio = int(respuesta["anio_inicio"])
+    if desde < anio_inicio:
         raise RangoProyeccionInvalidoError(
-            f"La proyección debe comenzar después de {ultimo_anio}."
+            f"La proyección debe comenzar después de {anio_inicio - 1}."
         )
 
-    modelo = cargar_modelo()
-    anios_futuros = list(range(desde, hasta + 1))
-    caracteristicas = construir_caracteristicas(
-        datos_historicos,
-        anios_futuros,
-    )
-    valores = modelo.predict(caracteristicas)
-
     return [
-        PuntoProyeccion(anio=anio, valor=round(float(valor), 2))
-        for anio, valor in zip(anios_futuros, valores)
+        PuntoProyeccion(anio=int(punto["anio"]), valor=round(float(punto["valor"]), 2))
+        for punto in respuesta["serie_proyectada"]
+        if desde <= int(punto["anio"]) <= hasta
     ]
