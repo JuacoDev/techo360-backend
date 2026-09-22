@@ -114,6 +114,15 @@ resuelve la coincidencia igual sin importar como se escriban.
 >>>       realmente se consulto -- pedirle un año distinto via --anio no
 >>>       produce un dato real de ese año, produce el estado actual
 >>>       etiquetado con un año falso (ver caso documentado abajo).
+>>>       LIMITACION ADICIONAL (22-sep-2026): el 73% de los municipios
+>>>       (816/1.118) tienen valuevar=0.0 exacto para
+>>>       tenencia_informal_terrenos -- probablemente subestima la
+>>>       informalidad real (contraste con UPRA: solo 79/1.104
+>>>       municipios en banda 0%-25%), no una lectura genuina de "sin
+>>>       informalidad". Ver el docstring completo de
+>>>       ingestion/igac_catastro_adapter.py para la causa tecnica
+>>>       exacta y por que UPRA no se adopta todavia como reemplazo
+>>>       (solo PDF, vigencia fija en 2020). Sin corregir aun.
 >>>
 >>> >>> CASO REAL: tenencia_informal_terrenos quedo con UN SOLO año
 >>> >>> real (30/31-ago-2026) <<<

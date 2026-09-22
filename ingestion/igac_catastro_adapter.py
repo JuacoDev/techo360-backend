@@ -33,6 +33,53 @@ pedir CONTEOS ya calculados por municipio, en vez de descargar millones
 de predios individuales -- confirmado en vivo: Medellin (05001) tiene
 1.150.797 predios totales, y la consulta agregada devuelve el conteo
 al instante, sin descargar cada fila.
+
+>>> LIMITACION CONOCIDA, no ocultar (encontrada 22-sep-2026 durante la
+auditoria de cobertura de la Fase 2 de scraping, ver
+auditoria_cobertura_variables.py) <<<
+El 73% de los municipios con fila real (816 de 1.118, verificado en
+vivo contra produccion) tienen valuevar=0.0 exacto para
+tenencia_informal_terrenos. La causa tecnica esta en fetch() (linea
+~122 mas abajo): `informales.get(cod_divipola, (nombre, 0))` trata la
+AUSENCIA de cualquier predio con condicion_predio='Informal' en un
+municipio como "0% de informalidad real", sin poder distinguir eso de
+"el catastro multiproposito todavia no ha llegado a clasificar la
+condicion de tenencia en este municipio" -- el campo `total` (linea
+119) SI viene poblado (por eso el municipio no se descarta por completo
+en la linea 120), pero eso solo confirma que existen predios
+catastrados, no que su condicion_predio ya fue evaluada.
+
+Contraste con una fuente independiente (UPRA, Indice de Informalidad en
+la Tenencia de la Tierra): segun su metadata oficial
+(catalogometadatos.upra.gov.co, uuid c45c0895-43c9-4a2b-b350-a4ca7da900aa,
+consultada en vivo 22-sep-2026), de los 1.104 municipios evaluados solo
+79 caen en la banda 0%-25% de informalidad -- un panorama radicalmente
+distinto al 73% en 0% exacto que produce este adaptador. Esto es
+evidencia corroborante (no una prueba matematica directa, las dos
+fuentes miden con metodologias distintas) de que el 0.0 de este
+adaptador subestima la informalidad real en una parte importante de los
+municipios, en vez de reflejarla genuinamente.
+
+UPRA NO se adopta como reemplazo por dos razones confirmadas en vivo
+contra su propio catalogo de metadatos: (1) el UNICO formato publicado
+es PDF (`<dc:format>PDF</dc:format>` en el XML de metadata, sin
+shapefile/CSV/geodatabase ni servicio WFS/REST registrado) -- extraer
+un valor por municipio requeriria parsear tablas de un PDF (Cuadro 8,
+"Indice de informalidad municipal 2020"), el ultimo recurso segun la
+jerarquia de fuentes de este proyecto (API > descarga estructurada >
+scraping), no algo a lo que comprometerse sin evaluar el costo real de
+ese parseo; (2) la vigencia declarada en el propio titulo del dataset
+sigue siendo "2020" -- la fecha `dct:modified=2023-07-19` en la
+metadata es cuando se retoco el REGISTRO del catalogo, no una
+actualizacion del dato subyacente, confirmado leyendo la descripcion
+completa del registro (sigue hablando de "la vigencia 2020" en presente).
+
+Estado: el bug queda documentado pero SIN corregir todavia -- corregirlo
+bien (distinguir "0% real" de "catastro no clasificado aqui") requeriria
+un campo adicional en MapCalorDB para registrar cobertura de
+clasificacion por municipio, o una fuente de reemplazo con mejor
+metodologia y formato descargable, ninguna de las cuales se investigo
+todavia mas alla de UPRA. No se cambia el pipeline en este commit.
 """
 import logging
 
