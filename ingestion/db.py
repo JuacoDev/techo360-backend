@@ -106,6 +106,30 @@ resuelve la coincidencia igual sin importar como se escriban.
 >>>
 >>> Valores de originVar en uso (reales, ya existentes, sin tocar):
 >>>   "TerriData"      -- dato real observado, via TerriDataAdapter.
+>>>       Para densidad_poblacional especificamente, ver
+>>>       "DANE-proyeccion-poblacion-2024" mas abajo -- reemplazo desde
+>>>       22-sep-2026, TerriData queda solo como fuente historica
+>>>       (años 2008-2023) para esta variable.
+>>>   "DANE-proyeccion-poblacion-{anio}" (agregado 22-sep-2026, ver
+>>>       ingestion/dane_poblacion_adapter.py y
+>>>       ingestion/actualizar_densidad_dane.py) -- dato real observado
+>>>       para densidad_poblacional, calculado como poblacion municipal
+>>>       DANE (anexo oficial PPED 2018-2042, publicado 08-ago-2025) /
+>>>       area_km2 (PostGIS sobre zonas_municipio.geom, capa canonica
+>>>       IGAC). Reemplaza a "TerriData" para esta variable en TODOS los
+>>>       municipios (no solo los gaps) para no dejarla dividida entre 2
+>>>       origenes distintos -- decision explicita del usuario tras
+>>>       confirmar con un sanity check en vivo que ambas fuentes
+>>>       coinciden casi exactamente (ratio mediana nueva/vieja = 1.00,
+>>>       p10=0.998, p90=1.002, sobre 1.102 municipios comparados).
+>>>       Cierra 2 de los 3 gaps de densidad_poblacional que TerriData
+>>>       nunca cubrio: San Andres (88001, TerriData solo publica el
+>>>       archipielago como agregado departamental 88000, nunca
+>>>       desagregado) y Nuevo Belen de Bajira (27493, municipio
+>>>       reciente). El tercer gap (00000, "Area En Litigio
+>>>       Cauca-Huila") sigue sin dato -- no tiene codigo de municipio
+>>>       en NINGUNA fuente ya investigada, territorio en disputa sin
+>>>       administracion municipal propia.
 >>>   "IGAC Catastro"  -- dato real observado, via IGACCatastroAdapter,
 >>>       PERO ver aviso especial sobre tenencia_informal_terrenos mas
 >>>       abajo -- esta fuente es un snapshot EN VIVO (capa ArcGIS del
