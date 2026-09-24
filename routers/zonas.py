@@ -52,13 +52,80 @@ CODIGO_AGREGADO_NACIONAL_TERRIDATA = "01001"
 # umbral k=33% oficial -- aqui es un promedio simple de 3 componentes
 # con peso igual 1/3 cada uno.
 # Acueducto y alcantarillado se INVIERTEN (1 - normalizado) porque mas
-# cobertura = menos privacion; deficit_habitacional_total ya viene en
-# la direccion correcta (mas deficit = mas privacion), no se invierte.
+# cobertura = menos privacion; el deficit ya viene en la direccion
+# correcta (mas deficit = mas privacion), no se invierte.
 # densidad_poblacional queda fuera a proposito -- es ponderador visual
 # de tamaño/opacidad en el frontend, no se mezcla en el color del mapa.
+#
+# >>> AVISO: por que el componente de deficit es el CUANTITATIVO y no el
+# >>> TOTAL (corregido 23-sep-2026) -- doble conteo confirmado <<<
+# Hasta este cambio, el tercer componente era deficit_habitacional_total.
+# Eso contaba acueducto y alcantarillado DOS VECES: una como variables
+# independientes (los dos primeros terminos) y otra dentro del propio
+# deficit. Confirmado en la fuente oficial, no asumido -- se descargo el
+# anexo real del DANE que ya ingiere ingestion/dane_deficit_adapter.py
+# (deficit-hab-2020-anexo-nueva-metodologia.xlsx, hoja "Total
+# Municipios") y se leyeron las columnas de componentes que ese adapter
+# NO usa (11-28):
+#   - Deficit CUANTITATIVO (cols 11-14): Tipo de vivienda, Material de
+#     Paredes, Cohabitacion, Hacinamiento no mitigable. NINGUN
+#     componente de servicios publicos.
+#   - Deficit CUALITATIVO (cols 15-28): incluye explicitamente "Agua
+#     para cocinar" (col 21) y "Alcantarillado" (col 23), ademas de
+#     Cocina, Energia y Recoleccion de basuras.
+# Como deficit_habitacional_total = cuantitativo + cualitativo, el total
+# arrastra ese solapamiento; el cuantitativo no.
+#
+# MAGNITUD del solapamiento: el cociente (Agua para cocinar jerarquizado
+# + Alcantarillado jerarquizado) / hogares en deficit cualitativo tiene
+# mediana 0.677 sobre 1.121 municipios del anexo, y supera 0.5 en el
+# 68,8% de ellos. Los componentes NO son mutuamente excluyentes entre si
+# (un hogar puede tener varias carencias a la vez), asi que ese cociente
+# mide PESO, no una descomposicion exacta -- puede pasar de 1.
+#
+# CONFIRMACION EMPIRICA INDEPENDIENTE (mapcalordb, yearm=2024), que
+# coincide con lo que predice la estructura de componentes del anexo:
+#   corr(deficit_cualitativo,  cobertura_alcantarillado) = -0.358
+#   corr(deficit_total,        cobertura_alcantarillado) = -0.307
+#   corr(deficit_CUANTITATIVO, cobertura_alcantarillado) = -0.022
+#   corr(deficit_CUANTITATIVO, cobertura_acueducto)      = -0.073
+# El cuantitativo es practicamente ortogonal a las coberturas -- justo
+# lo que se espera de una variable que no las contiene.
+#
+# POR QUE ESTA OPCION Y NO LA CONTRARIA (quitar las coberturas y dejar
+# el deficit total): (1) mantiene la estructura Alkire-Foster de 3
+# componentes con peso 1/3, sin rediseñar el score; (2) las coberturas
+# son las UNICAS entradas del score con dato real observado (TerriData),
+# mientras que el deficit de 2024 es una proyeccion con fiabilidad 70%
+# (ver ingestion/proyeccion_2024.py) -- quitarlas dejaria el compuesto
+# reducido a una sola variable proyectada.
+#
+# IMPACTO MEDIDO antes de aplicar, sobre los 1.052 municipios con los 3
+# insumos completos (no una muestra chica): delta del score media
+# -0.1178, mediana -0.1180, rango -0.2943 a +0.0502; Pearson
+# actual-vs-nuevo 0.9392, Spearman (ranking) 0.9478; cambio de puesto en
+# el ranking mediana 62, p90 164, maximo 320, con 304 municipios
+# moviendose mas de 100 puestos. Es decir: el orden general se conserva
+# pero la reordenacion NO es trivial, y el score baja ~0.12 en promedio
+# para todos (el cuantitativo es de menor magnitud que el total) -- es
+# un cambio visible para el usuario, no cosmetico.
+#
+# LIMITE HONESTO de esta correccion: usar solo el cuantitativo descarta
+# la parte del deficit cualitativo que NO son servicios (hacinamiento
+# mitigable, pisos, cocina). La opcion mas fiel seria reconstruir un
+# "cualitativo sin servicios" a partir de las columnas de componentes
+# del anexo (que ya existen en la fuente, solo falta ingerirlas) y usar
+# cuantitativo + ese residuo. No se hizo aqui porque requiere extender
+# dane_deficit_adapter.py con variables nuevas; queda como mejora
+# pendiente, no como algo ya resuelto.
+#
+# IMPORTANTE: esto cambia solo QUE ENTRA AL SCORE COMPUESTO.
+# deficit_habitacional_total sigue siendo una de las 7 variables que se
+# exponen en properties.indicadores y se muestran en el panel -- no se
+# oculta ni se deja de calcular.
 VARIABLE_ACUEDUCTO = "cobertura_acueducto"
 VARIABLE_ALCANTARILLADO = "cobertura_alcantarillado"
-VARIABLE_DEFICIT_COMPUESTO = "deficit_habitacional_total"
+VARIABLE_DEFICIT_COMPUESTO = "deficit_habitacional_cuantitativo"
 
 
 def _normalizar_minmax(valor: float | None, minimo: float | None, maximo: float | None) -> float | None:
@@ -73,10 +140,13 @@ def _normalizar_minmax(valor: float | None, minimo: float | None, maximo: float 
 def _score_privacion(indicadores_zona: dict) -> float | None:
     """Score compuesto de privacion (0=mejor, 1=peor), promedio simple
     1/3 + 1/3 + 1/3 de acueducto invertido, alcantarillado invertido, y
-    deficit habitacional total (sin invertir). None si falta cualquiera
-    de los 3 insumos -- incluye el caso MpCodigo=00000 (Area en Litigio
-    Cauca-Huila), que no tiene fila real en mapcalordb para ninguna
-    variable, asi que cae aqui de forma natural sin caso especial."""
+    deficit habitacional CUANTITATIVO (sin invertir -- ver el aviso de
+    doble conteo arriba: el cuantitativo, a diferencia del total, no
+    contiene componentes de acueducto/alcantarillado). None si falta
+    cualquiera de los 3 insumos -- incluye el caso MpCodigo=00000 (Area
+    en Litigio Cauca-Huila), que no tiene fila real en mapcalordb para
+    ninguna variable, asi que cae aqui de forma natural sin caso
+    especial."""
     acueducto = indicadores_zona.get(VARIABLE_ACUEDUCTO, {}).get("score_normalizado")
     alcantarillado = indicadores_zona.get(VARIABLE_ALCANTARILLADO, {}).get("score_normalizado")
     deficit = indicadores_zona.get(VARIABLE_DEFICIT_COMPUESTO, {}).get("score_normalizado")

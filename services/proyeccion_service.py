@@ -3,8 +3,39 @@ from services.proyeccion_rpc_client import solicitar_proyeccion
 
 
 INDICADOR_VIGENTE = "densidad_poblacional"
-MODELO_VIGENTE = "LightGBM"
-ORIGEN_PROYECCION = "LightGBM-proyeccion"
+
+# >>> AVISO: ya NO es LightGBM (23-sep-2026) <<<
+# Estos dos valores decian "LightGBM" / "LightGBM-proyeccion". El
+# servicio de proyeccion (techo360-proyeccion) dejo de usar LightGBM para
+# densidad_poblacional tras un backtesting contra los años reales
+# 2019-2024: la extrapolacion lineal sobre los ultimos puntos reales dio
+# RMSE 28.07 contra 223.89 del LightGBM recursivo, y el modelo llegaba a
+# correlacionar NEGATIVAMENTE (-0.212) con la tendencia real. El aviso
+# completo, con la tabla del backtesting y sus limitaciones, esta en el
+# docstring de app/services/proyeccion.py de ese repo.
+#
+# Se mantienen los MISMOS campos del contrato (`modelo`, `origen`), solo
+# cambia su valor -- seguir diciendo "LightGBM" seria reportar algo que
+# no es lo que se calculo.
+#
+# El origen usa el prefijo "proyeccion-" a proposito: es la convencion
+# del proyecto para distinguir relleno de dato real, y es la que el
+# frontend usa para clasificar la tarjeta (ver PanelIndicadores.jsx y el
+# catalogo de originVar en ingestion/db.py). Nota: "LightGBM-proyeccion"
+# sigue RESERVADO en ese catalogo para el dia en que algun modelo si
+# supere a su baseline -- no se reutiliza aqui.
+#
+# >>> OJO: estos dos valores estan DUPLICADOS entre repos <<<
+# El calculo real vive en techo360-proyeccion
+# (app/services/proyeccion.py::METODO_VIGENTE) y este backend solo
+# reproduce el nombre; la respuesta del RPC ya trae su propio campo
+# "modelo", pero el router arma la respuesta con estas constantes. Si se
+# cambia el metodo alla y no aca, la API reporta un nombre que no
+# corresponde al calculo -- ya paso una vez al pasar de 2 puntos a 4.
+# Mantenerlos sincronizados a mano hasta que se decida propagar el valor
+# que devuelve el RPC en vez de hardcodearlo.
+MODELO_VIGENTE = "regresion-lineal-4puntos"
+ORIGEN_PROYECCION = "proyeccion-regresion-lineal-4puntos"
 
 # Traduce el "tipo" que pone el consumer de techo360-proyeccion en la
 # respuesta de error (ver app/rabbitmq_consumer.py de ese repo) al tipo
@@ -54,7 +85,7 @@ async def calcular_proyeccion(
     respuesta = await solicitar_proyeccion(payload)
 
     if respuesta.get("status") != "ok":
-        detail = respuesta.get("detail") or "El modelo LightGBM no está disponible."
+        detail = respuesta.get("detail") or "El servicio de proyección no está disponible."
         error_factory = _ERROR_POR_TIPO.get(respuesta.get("tipo"), ModeloNoDisponibleError)
         raise error_factory(detail)
 

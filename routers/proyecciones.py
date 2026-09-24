@@ -26,13 +26,15 @@ router = APIRouter(
     summary="Obtener proyección futura",
     description=(
         "Calcula la serie futura de densidad_poblacional mediante "
-        "el modelo LightGBM vigente."
+        "regresión lineal sobre los últimos puntos reales del "
+        "municipio (ver services/proyeccion_service.py: ya no se usa "
+        "LightGBM para esta variable)."
     ),
     responses={
         401: {"description": "Requiere autenticación."},
         404: {"description": "No existen datos para el municipio."},
         422: {"description": "El código o indicador no son válidos."},
-        503: {"description": "El modelo LightGBM no está disponible."},
+        503: {"description": "El servicio de proyección no está disponible."},
         504: {"description": "El servicio de proyección no respondió a tiempo."},
     },
 )

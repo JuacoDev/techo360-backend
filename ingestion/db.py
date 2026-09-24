@@ -235,13 +235,30 @@ resuelve la coincidencia igual sin importar como se escriban.
 >>>       honesta que calcular -- se reutiliza el snapshot 2026 tal cual
 >>>       para 2024, con fiabilidad BAJA (es el mismo dato de hoy, no una
 >>>       medicion de 2024).
+>>>   "proyeccion-regresion-lineal-4puntos" (agregado 23-sep-2026)
+>>>       -- densidad_poblacional hacia el futuro, calculado por
+>>>       techo360-proyeccion (GET /api/proyecciones). Regresion lineal
+>>>       por minimos cuadrados sobre los 4 ultimos puntos REALES del
+>>>       municipio (ventana elegida con un backtesting de 4 cortes, ver
+>>>       ese modulo), ajustada contra el año real de cada punto y con
+>>>       recorte en 0. La primera version uso solo 2 puntos, pero el
+>>>       ultimo par podia no representar la tendencia (Medellin,
+>>>       Barranquilla y Cali proyectaban caida teniendo serie al alza).
+>>>       Reemplazo a
+>>>       LightGBM para esta variable tras un backtesting contra los años
+>>>       reales 2019-2024 (RMSE 28.07 vs 223.89 del LightGBM recursivo,
+>>>       que ademas correlacionaba NEGATIVAMENTE, -0.212, con la
+>>>       tendencia real). Ver el docstring de app/services/proyeccion.py
+>>>       en techo360-proyeccion para la tabla completa y la limitacion
+>>>       conocida del backtesting (los "reales" son a su vez
+>>>       proyecciones DANE/TerriData, no mediciones independientes).
 >>>   "LightGBM-proyeccion" -- reservado para cuando un modelo entrenado
->>>       SI demuestre superar su baseline ingenuo correspondiente (ej.
->>>       si densidad_poblacional alguna vez necesitara proyeccion mas
->>>       alla de 2026 -- esa variable si supero el baseline en el
->>>       entrenamiento ya documentado). No usar este valor solo porque
->>>       el metodo "suena mas sofisticado" si la evidencia real dice
->>>       que un metodo mas simple generaliza mejor.
+>>>       SI demuestre superar su baseline ingenuo correspondiente. Sigue
+>>>       SIN USARSE: la ultima variable que lo iba a usar
+>>>       (densidad_poblacional) quedo descartada por el backtesting de
+>>>       arriba. No usar este valor solo porque el metodo "suena mas
+>>>       sofisticado" si la evidencia real dice que un metodo mas simple
+>>>       generaliza mejor.
 """
 import logging
 
