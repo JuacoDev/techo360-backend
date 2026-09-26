@@ -235,15 +235,19 @@ def obtener_zonas(
         # variables) -- se arma un dict en memoria, indexado por
         # (codigodivipola, namevar), y se cruza abajo por Feature. ---
         indicadores_por_codigo: dict[str, dict[str, dict]] = {}
+        # Query por-municipio (variables crudas para las 7 variables, un
+        # año) -- usada por la rama municipio directamente, y por la
+        # rama departamento para calcular el score_privacion promedio
+        # (ver AVISO mas abajo) sin duplicar el texto SQL entre ambas.
+        query_indicadores = text("""
+            SELECT codigodivipola, namevar, valuevar, originvar, intervaloconfianza
+            FROM public.mapcalordb
+            WHERE yearm = :anio
+              AND namevar = ANY(:variables)
+              AND codigodivipola IS NOT NULL
+              AND codigodivipola != :codigo_agregado_nacional
+        """)
         if nivel == "municipio":
-            query_indicadores = text("""
-                SELECT codigodivipola, namevar, valuevar, originvar, intervaloconfianza
-                FROM public.mapcalordb
-                WHERE yearm = :anio
-                  AND namevar = ANY(:variables)
-                  AND codigodivipola IS NOT NULL
-                  AND codigodivipola != :codigo_agregado_nacional
-            """)
             filas_indicadores = db.execute(
                 query_indicadores,
                 {
@@ -324,6 +328,73 @@ def obtener_zonas(
                     "anio_real": fila["yearm"]
                 }
 
+            # >>> AVISO -- score_privacion a nivel departamento (T-?, 26-sep-2026) <<<
+            # Se reusa LITERALMENTE el mismo score_privacion ya calculado
+            # por municipio (mismos insumos min-max que la rama
+            # nivel=municipio, misma _score_privacion()) -- no se
+            # recalcula un min-max nuevo a nivel departamento, para que
+            # sea "el mismo score", como se pidio explicitamente. Esto es
+            # una consulta SEPARADA de la de arriba (que solo trae UN
+            # valor arbitrario -- el mas reciente -- por variable y
+            # departamento, sin agregar entre municipios): aqui se
+            # necesita el dato de CADA municipio para promediarlo.
+            filas_indicadores_score = db.execute(
+                query_indicadores,
+                {
+                    "anio": anio,
+                    "variables": VARIABLES_INDICADORES,
+                    "codigo_agregado_nacional": CODIGO_AGREGADO_NACIONAL_TERRIDATA,
+                },
+            ).mappings().all()
+
+            valores_por_variable_score: dict[str, list[float]] = {v: [] for v in VARIABLES_INDICADORES}
+            for fila in filas_indicadores_score:
+                if fila["valuevar"] is not None:
+                    valores_por_variable_score[fila["namevar"]].append(float(fila["valuevar"]))
+            minmax_por_variable_score: dict[str, tuple[float | None, float | None]] = {
+                variable: (min(valores), max(valores)) if valores else (None, None)
+                for variable, valores in valores_por_variable_score.items()
+            }
+
+            indicadores_por_municipio_score: dict[str, dict[str, dict]] = {}
+            for fila in filas_indicadores_score:
+                codigo_mun = fila["codigodivipola"]
+                variable = fila["namevar"]
+                valor = float(fila["valuevar"]) if fila["valuevar"] is not None else None
+                minimo, maximo = minmax_por_variable_score.get(variable, (None, None))
+                indicadores_por_municipio_score.setdefault(codigo_mun, {})[variable] = {
+                    "score_normalizado": _normalizar_minmax(valor, minimo, maximo),
+                }
+
+            # >>> AVISO -- ponderacion SIMPLE, no por poblacion (decision
+            # explicita del usuario, 26-sep-2026) <<<
+            # El pedido original queria promedio ponderado por poblacion,
+            # con la clausula "si no hay variable de poblacion
+            # disponible, usar promedio simple y dejarlo documentado
+            # como tal". No hay una variable de poblacion TOTAL entre los
+            # 7 indicadores expuestos -- solo densidad_poblacional
+            # (hab/km2, no poblacion cruda). Derivarla exigiria una
+            # consulta PostGIS nueva (densidad x area, ST_Area sobre
+            # zonas_municipio.geom) que el usuario decidio NO agregar
+            # (mantener el cambio acotado a lo pedido) -- se usa promedio
+            # SIMPLE entre los municipios del departamento con score
+            # valido.
+            scores_por_departamento: dict[str, list[float]] = {}
+            for codigo_mun, indicadores_mun in indicadores_por_municipio_score.items():
+                score_mun = _score_privacion(indicadores_mun)
+                if score_mun is None:
+                    continue
+                codigo_depto = str(codigo_mun).strip().zfill(5)[:2]
+                scores_por_departamento.setdefault(codigo_depto, []).append(score_mun)
+
+            # None (no 0) para un departamento sin NINGUN municipio con
+            # score valido -- el frontend debe tratarlo como "sin dato"
+            # real, no como "privacion cero" (decision explicita del
+            # pedido).
+            score_privacion_por_departamento: dict[str, float | None] = {
+                depto: round(sum(scores) / len(scores), 4) for depto, scores in scores_por_departamento.items()
+            }
+
         features = []
 
         for zona in resultados:
@@ -359,10 +430,14 @@ def obtener_zonas(
                 # Score compuesto de privacion (T-49) -- None
                 # para MpCodigo=00000 (Area en Litigio) de forma natural,
                 # ya que esa zona no tiene score_normalizado en ninguna
-                # de las 3 variables que entran al compuesto. Solo se
-                # calcula a nivel municipio (el choropleth del mapa es
-                # a este nivel; departamento no lo necesita hoy).
+                # de las 3 variables que entran al compuesto.
                 properties["score_privacion"] = _score_privacion(properties["indicadores"])
+            else:
+                # Promedio simple de los score_privacion municipales del
+                # departamento (ver AVISO arriba) -- None (no 0) si
+                # NINGUN municipio del departamento tiene score valido,
+                # para que el frontend lo trate como "sin dato" real.
+                properties["score_privacion"] = score_privacion_por_departamento.get(zona["codigo"])
 
             features.append({
                 "type": "Feature",
