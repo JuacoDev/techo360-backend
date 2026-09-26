@@ -66,6 +66,7 @@ import logging
 import time
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 import openpyxl
 
@@ -76,6 +77,30 @@ logger = logging.getLogger(__name__)
 XLSX_URL = "https://www.dane.gov.co/files/censo2018/proyecciones-de-poblacion/Municipal/PPED-AreaSexoEdadMun-2018-2042_VP.xlsx"
 INDICE_HOJA = 2  # "PobMunicipalxAreaSexoEdad", ver aviso del modulo
 FILA_DATOS_DESDE = 10  # 1-indexado: fila 8 encabezado, fila 9 sub-encabezado, datos desde la 10
+
+# >>> AVISO -- cache en disco, DELIBERADAMENTE temporal (25-sep-2026) <<<
+# El archivo (131.6 MB, ~53s de descarga medidos en vivo) se cacheaba
+# antes SOLO en memoria (self._cache_bytes), lo cual no sobrevive entre
+# subprocesos -- ingestion/cargar_dane_con_reintentos.py lanza un
+# subproceso NUEVO por cada reintento de un año, asi que cada reintento
+# volvia a pagar los ~53s de descarga desde cero. Como
+# LIVENESS_TIMEOUT_S del watchdog es 45s, eso GARANTIZABA un cuelgue
+# falso-positivo en cada intento (confirmado en vivo: 6/6 reintentos
+# agotados dos corridas seguidas, siempre en el mismo punto exacto).
+#
+# Este cache de disco es un parche puntual para ESTE problema, no la
+# solucion definitiva: Redis ya esta disponible en la infraestructura
+# del proyecto (ver techo360-infra/docker-compose.yml) y ahi es donde
+# deberia vivir el cacheo de descargas pesadas a futuro, no en disco ni
+# en memoria de proceso -- ver
+# techo360-infra/REDIS_MIGRATION_CANDIDATES.txt para el resto de
+# adaptadores con el mismo patron ad-hoc pendientes de esa migracion.
+# Si el DANE publica una version nueva del anexo, este cache queda
+# desactualizado y hay que borrarlo a mano (no hay invalidacion
+# automatica por fecha/hash -- no vale la pena construirla para algo
+# que la migracion a Redis va a reemplazar).
+DIR_CACHE = Path(__file__).resolve().parent.parent / "data" / "cache"
+CACHE_XLSX_PATH = DIR_CACHE / "dane_poblacion_pped.xlsx"
 
 COL_CODIGO_MUNICIPIO = 2
 COL_NOMBRE_MUNICIPIO = 3
@@ -98,30 +123,76 @@ class DanePoblacionAdapter:
         if self._cache_bytes is not None:
             return self._cache_bytes
 
+        if CACHE_XLSX_PATH.exists():
+            print(f"    (usando cache en disco de {CACHE_XLSX_PATH.name}, "
+                  f"{CACHE_XLSX_PATH.stat().st_size / 1_000_000:.1f} MB -- borrar el archivo a mano "
+                  f"si el DANE publico una version nueva del anexo)", flush=True)
+            self._cache_bytes = CACHE_XLSX_PATH.read_bytes()
+            return self._cache_bytes
+
         ultimo_error = None
         for intento in range(intentos):
             try:
                 req = urllib.request.Request(XLSX_URL, headers=HTTP_HEADERS)
                 with urllib.request.urlopen(req, timeout=self._timeout) as resp:
-                    contenido = resp.read()
+                    total_bytes = resp.length or 0
+                    partes = []
+                    leidos = 0
+                    ultimo_reporte = time.time()
+                    while True:
+                        bloque = resp.read(1_048_576)  # 1 MB por bloque
+                        if not bloque:
+                            break
+                        partes.append(bloque)
+                        leidos += len(bloque)
+                        # Heartbeat real: imprime progreso cada ~3s para
+                        # resetear el reloj de liveness del watchdog (ver
+                        # AVISO arriba) -- sin esto, LIVENESS_TIMEOUT_S=45s
+                        # mataba el proceso a mitad de una descarga sana.
+                        if time.time() - ultimo_reporte >= 3:
+                            pct = f" ({100 * leidos / total_bytes:.0f}%)" if total_bytes else ""
+                            print(f"    descargando anexo DANE-poblacion: {leidos / 1_000_000:.1f} MB{pct}...", flush=True)
+                            ultimo_reporte = time.time()
+                    contenido = b"".join(partes)
                 self._cache_bytes = contenido
+                DIR_CACHE.mkdir(parents=True, exist_ok=True)
+                CACHE_XLSX_PATH.write_bytes(contenido)
                 return contenido
             except (urllib.error.URLError, ConnectionResetError, TimeoutError, OSError) as e:
                 ultimo_error = e
                 logger.warning(f"Descarga del anexo DANE-poblacion fallo (intento {intento + 1}/{intentos}): {e}")
+                print(f"    descarga fallo (intento {intento + 1}/{intentos}): {e}", flush=True)
                 time.sleep(4)
         raise RuntimeError(f"No se pudo descargar el anexo DANE-poblacion tras {intentos} intentos") from ultimo_error
 
     def poblacion_por_municipio(self, anio: int) -> dict[str, tuple[str, int]]:
         """Devuelve {codigo_divipola: (nombre_municipio, poblacion_total)}
         para el año pedido, SOLO filas con area geografica 'Total' (evita
-        contar cabecera+rural duplicado)."""
+        contar cabecera+rural duplicado).
+
+        >>> AVISO -- heartbeat de parseo (25-sep-2026) <<<
+        load_workbook(read_only=True) es practicamente instantaneo (lazy),
+        pero iter_rows() sobre las ~84.236 filas del anexo (todos los años
+        2018-2042 mezclados, aunque aqui solo se use un año a la vez) mide
+        ~63s en vivo -- trabajo de CPU puro, sin ninguna salida durante el
+        proceso. Eso por si solo ya superaba LIVENESS_TIMEOUT_S=45s del
+        watchdog (ver cargar_dane_con_reintentos.py), causando el MISMO
+        sintoma de cuelgue falso-positivo que la descarga sin heartbeat
+        (ver AVISO junto a CACHE_XLSX_PATH mas arriba) -- dos causas
+        distintas, mismo sintoma. Por eso el progreso se imprime tambien
+        aqui, no solo en la descarga."""
         contenido = self._descargar_xlsx()
         wb = openpyxl.load_workbook(io.BytesIO(contenido), read_only=True, data_only=True)
         ws = wb[wb.sheetnames[INDICE_HOJA]]
 
         resultado: dict[str, tuple[str, int]] = {}
+        filas_leidas = 0
+        ultimo_reporte = time.time()
         for fila in ws.iter_rows(min_row=FILA_DATOS_DESDE, values_only=True):
+            filas_leidas += 1
+            if time.time() - ultimo_reporte >= 3:
+                print(f"    parseando anexo DANE-poblacion: {filas_leidas} filas leidas...", flush=True)
+                ultimo_reporte = time.time()
             codigo_crudo = fila[COL_CODIGO_MUNICIPIO]
             if codigo_crudo is None:
                 continue

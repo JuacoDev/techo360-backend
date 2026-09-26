@@ -102,6 +102,18 @@ class DaneDeficitAdapter(DataSourceAdapter):
 
     def __init__(self, timeout: float = 60.0):
         self._timeout = timeout
+        # >>> AVISO -- candidato a Redis (25-sep-2026) <<<
+        # Cache SOLO en memoria de instancia -- no sobrevive entre
+        # procesos/subprocesos. Mismo patron ad-hoc ya identificado en
+        # ingestion/dane_poblacion_adapter.py, donde se parcheo con un
+        # cache de disco DELIBERADAMENTE temporal porque este adaptador
+        # se invocaba desde subprocesos nuevos en cada reintento del
+        # watchdog. Este archivo NO se toco en ese parche (no forma
+        # parte de la carga 2025-2042 en curso) pero tiene la misma
+        # limitacion estructural. Ver
+        # techo360-infra/REDIS_MIGRATION_CANDIDATES.txt -- el reemplazo
+        # correcto a futuro es Redis (ya en la infra del proyecto), no
+        # replicar el parche de disco aqui tambien.
         self._cache_bytes: bytes | None = None
 
     def _descargar_xlsx(self, intentos: int = 4) -> bytes:

@@ -259,6 +259,35 @@ resuelve la coincidencia igual sin importar como se escriban.
 >>>       arriba. No usar este valor solo porque el metodo "suena mas
 >>>       sofisticado" si la evidencia real dice que un metodo mas simple
 >>>       generaliza mejor.
+>>>
+>>> AVISO IMPORTANTE, no ocultar -- guardar_indicador() NO ESCALA a
+>>> cargas masivas (24-sep-2026, ver ingestion/actualizar_densidad_dane.py):
+>>> cada llamada abre y cierra su PROPIA conexion TCP via _conectar()
+>>> (psycopg2.connect(database_url) sin timeout de socket/statement).
+>>> Contra la VPS de produccion, alcanzable solo por Tailscale y sin
+>>> conexion directa (ver seccion "Acceso a la base de datos" en
+>>> techo360/CLAUDE.md), cada conexion nueva mide ~15-17 segundos
+>>> (handshake TCP+TLS+auth via el relay de Tailscale, no solo el ping
+>>> ~180ms) -- medido en vivo al intentar cargar ~2.200 filas de un
+>>> tiron, que a ese ritmo habria tomado ~9-10 horas. Ademas, sin
+>>> timeout, un corte transitorio del relay puede dejar una conexion
+>>> colgada indefinidamente en estado "idle in transaction" (visto en
+>>> vivo esa misma corrida) en vez de fallar limpio y reintentar.
+>>> Para menos de ~100-200 filas por corrida esto es aceptable (asi se
+>>> uso en T-92 a T-95 y en las correcciones puntuales de esta seccion).
+>>> Para cargas de miles de filas (ej. un rango de años, no un año
+>>> suelto), NO llamar a guardar_indicador() en un loop -- abrir UNA
+>>> conexion reutilizada para todo el lote/año y comitear al final. Ver
+>>> ingestion/actualizar_densidad_dane.py (funcion
+>>> guardar_indicadores_lote, agregada 24-sep-2026 especificamente para
+>>> esto) como referencia del patron alternativo: misma logica SQL de
+>>> UPDATE-antes-que-INSERT que este modulo, pero con la conexion como
+>>> parametro en vez de abrirla adentro. Se implemento LOCAL a ese
+>>> script, sin modificar guardar_indicador() aqui, para no tocar el
+>>> comportamiento que ya usan otros scripts de ingestion/ bajo presion
+>>> de una fecha de Sprint -- generalizar esto en db.py mismo (ej. que
+>>> guardar_indicador() acepte una conexion opcional) queda como mejora
+>>> pendiente, no urgente.
 """
 import logging
 
