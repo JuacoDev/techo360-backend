@@ -1,4 +1,4 @@
-from schemas.proyecciones import PuntoProyeccion
+from schemas.proyecciones import PuntoProyeccion, PuntoZona
 from services.proyeccion_rpc_client import solicitar_proyeccion
 
 
@@ -99,4 +99,29 @@ async def calcular_proyeccion(
         PuntoProyeccion(anio=int(punto["anio"]), valor=round(float(punto["valor"]), 2))
         for punto in respuesta["serie_proyectada"]
         if desde <= int(punto["anio"]) <= hasta
+    ]
+
+
+async def calcular_zonas(indicador: str, anio: int) -> list[PuntoZona]:
+    """T-104: choropleth completo -- pide a techo360-proyeccion el batch
+    de todos los municipios en una sola solicitud RPC (payload con
+    "tipo": "zonas", ver app/rabbitmq_consumer.py de ese repo), no un
+    loop de ~1105 llamadas a calcular_proyeccion() de aqui arriba (eso
+    tardaria ~13-85 min medido en vivo, ver diagnostico 26-sep-2026)."""
+    if indicador != INDICADOR_VIGENTE:
+        raise IndicadorNoSoportadoError(
+            f"El indicador soportado es '{INDICADOR_VIGENTE}'."
+        )
+
+    payload = {"tipo": "zonas", "indicador": indicador, "anio": anio}
+    respuesta = await solicitar_proyeccion(payload)
+
+    if respuesta.get("status") != "ok":
+        detail = respuesta.get("detail") or "El servicio de proyección no está disponible."
+        error_factory = _ERROR_POR_TIPO.get(respuesta.get("tipo"), ModeloNoDisponibleError)
+        raise error_factory(detail)
+
+    return [
+        PuntoZona(codigo_municipio=zona["codigo_municipio"], valor=zona["valor"], es_real=zona["es_real"])
+        for zona in respuesta["zonas"]
     ]
