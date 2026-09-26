@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from core.config import settings
 from ingestion.scheduler import iniciar_scheduler
-from routers import auth, health, otp, proyecciones ,usuarios, zonas, indicadores
+from routers import auth, chatbot, health, otp, proyecciones ,usuarios, zonas, indicadores
 from services.email_service import email_service
 
 app = FastAPI(
@@ -35,6 +35,7 @@ app.include_router(usuarios.router)
 app.include_router(proyecciones.router)
 app.include_router(auth.router)
 app.include_router(indicadores.router)
+app.include_router(chatbot.router)
 
 @app.on_event("startup")
 async def iniciar_pipeline_datos():

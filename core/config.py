@@ -11,6 +11,18 @@ class Settings(BaseSettings):
         "postgresql://usuario:password@localhost:5432/techo360_principal"
     )
 
+    # postgres-vector -- conversaciones/mensajes del chatbot (T-97,
+    # migracion en techo360-chatbot/migrations/0001_conversaciones_mensajes.sql).
+    # Decision del usuario (26-sep-2026): el backend maneja TODA la
+    # persistencia -- los servicios de IA (chatbot, proyeccion) solo
+    # procesan solicitudes, no son dueños de su propia escritura a BD.
+    # Por eso el backend necesita esta credencial (antes solo la tenia
+    # techo360-chatbot) en vez de pedirle a chatbot que escriba por su
+    # cuenta via RabbitMQ.
+    database_vector_url: str = (
+        "postgresql://usuario:password@localhost:5432/techo360_vector"
+    )
+
     # Redis
     redis_url: str = "redis://localhost:6379/0"
 
