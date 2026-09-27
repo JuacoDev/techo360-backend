@@ -9,12 +9,15 @@ from schemas.auth import (
     LoginResponse,
     RegisterRequest,
     RegisterResponse,
-    CurrentUserResponse
+    CurrentUserResponse,
+    ResetPasswordRequest,
+    ResetPasswordResponse,
 )
 
 from db.session import get_db
 from models.mapcalor_user import MapCalorUser
 from services.auth_service import autenticar_usuario, hashear_password
+from services.otp_service import OTPInvalidError, OTPTooManyAttemptsError, otp_service
 from core.config import settings
 
 
@@ -137,6 +140,51 @@ def register(datos: RegisterRequest, db: Session = Depends(get_db)):
         "access_token": token,
         "token_type": "bearer"
     }
+
+
+# -------------------
+# Reset de contraseña (recuperacion con OTP)
+# -------------------
+# AVISO -- min_length=8 vive en dos sitios (aqui, via
+# ResetPasswordRequest, y en RegisterRequest) porque son los dos unicos
+# lugares donde se fija una contraseña nueva; login no la revalida
+# (compara contra el hash existente, no le importa la longitud).
+#
+# otp_service.verify_otp() es generico por correo (no distingue
+# "proposito registro" vs "proposito recuperacion", ver AVISO en
+# services/otp_service.py) -- se reutiliza tal cual, mismo patron que
+# ya usa el frontend antes de llamar a /auth/register.
+@router.post(
+    "/reset-password",
+    response_model=ResetPasswordResponse,
+    summary="Cambiar contraseña con codigo OTP",
+    description=(
+        "Verifica el codigo OTP enviado al correo y, si es valido, "
+        "actualiza la contraseña (hasheada con bcrypt). El codigo se "
+        "invalida al usarse (un solo uso, ver otp_service.verify_otp)."
+    ),
+    responses={
+        400: {"description": "Codigo invalido/expirado, o el correo no esta registrado."},
+        422: {"description": "Datos de entrada invalidos (ej. contraseña muy corta)."},
+        429: {"description": "Se agotaron los intentos de verificacion del codigo."},
+    },
+)
+async def reset_password(datos: ResetPasswordRequest, db: Session = Depends(get_db)):
+    try:
+        await otp_service.verify_otp(datos.email, datos.code)
+    except OTPInvalidError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except OTPTooManyAttemptsError as e:
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=str(e))
+
+    usuario = db.query(MapCalorUser).filter(MapCalorUser.correo == datos.email).first()
+    if usuario is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="El correo no está registrado")
+
+    usuario.passwordvar = hashear_password(datos.new_password)
+    db.commit()
+
+    return {"status": "ok"}
 
 
 # -------------------
