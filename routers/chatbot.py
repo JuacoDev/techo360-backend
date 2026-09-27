@@ -13,7 +13,7 @@ from schemas.chatbot import (
     CrearMensajeRequest,
     MensajeResponse,
 )
-from services.chatbot_service import agregar_mensaje, crear_conversacion
+from services import chatbot_service
 
 router = APIRouter(
     prefix="/chatbot",
@@ -41,7 +41,7 @@ def crear_conversacion(
     db: Session = Depends(get_db_vector),
     current_user: MapCalorUser = Depends(get_current_user),
 ):
-    return crear_conversacion(db, current_user.id, datos.consentimiento_entrenamiento)
+    return chatbot_service.crear_conversacion(db, current_user.id, datos.consentimiento_entrenamiento)
 
 
 @router.get(
@@ -99,7 +99,7 @@ def crear_mensaje(
     if conversacion is None:
         raise HTTPException(status_code=404, detail="Conversacion no encontrada.")
 
-    return agregar_mensaje(db, conversacion_id, datos.rol, datos.contenido)
+    return chatbot_service.agregar_mensaje(db, conversacion_id, datos.rol, datos.contenido)
 
 
 @router.patch(
