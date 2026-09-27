@@ -17,3 +17,18 @@ class ConversacionResponse(BaseModel):
     usuario_id: int
     consentimiento_entrenamiento: bool
     fecha: datetime
+
+
+class ActualizarFeedbackRequest(BaseModel):
+    feedback_util: bool
+
+
+class MensajeResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    conversacion_id: int
+    rol: str
+    contenido: str
+    feedback_util: bool | None
+    fecha: datetime

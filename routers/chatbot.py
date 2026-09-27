@@ -1,11 +1,17 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from db.session_vector import get_db_vector
 from models.conversacion import Conversacion
 from models.mapcalor_user import MapCalorUser
+from models.mensaje import Mensaje
 from routers.auth import get_current_user
-from schemas.chatbot import ConversacionResponse, CrearConversacionRequest
+from schemas.chatbot import (
+    ActualizarFeedbackRequest,
+    ConversacionResponse,
+    CrearConversacionRequest,
+    MensajeResponse,
+)
 
 router = APIRouter(
     prefix="/chatbot",
@@ -65,3 +71,40 @@ def listar_conversaciones(
         .order_by(Conversacion.fecha.desc())
         .all()
     )
+
+
+@router.patch(
+    "/mensajes/{mensaje_id}/feedback",
+    response_model=MensajeResponse,
+    summary="Marcar un mensaje del asistente como util o no",
+    description=(
+        "Actualiza feedback_util del mensaje. Solo el dueno de la "
+        "conversacion (via join a Conversacion) puede calificarlo -- "
+        "si el mensaje no existe o no le pertenece al usuario "
+        "autenticado, responde 404 en ambos casos, para no revelar "
+        "si el id existe."
+    ),
+    responses={
+        401: {"description": "Requiere sesión iniciada."},
+        404: {"description": "El mensaje no existe o no pertenece al usuario autenticado."},
+    },
+)
+def actualizar_feedback_mensaje(
+    mensaje_id: int,
+    datos: ActualizarFeedbackRequest,
+    db: Session = Depends(get_db_vector),
+    current_user: MapCalorUser = Depends(get_current_user),
+):
+    mensaje = (
+        db.query(Mensaje)
+        .join(Conversacion, Conversacion.id == Mensaje.conversacion_id)
+        .filter(Mensaje.id == mensaje_id, Conversacion.usuario_id == current_user.id)
+        .first()
+    )
+    if mensaje is None:
+        raise HTTPException(status_code=404, detail="Mensaje no encontrado.")
+
+    mensaje.feedback_util = datos.feedback_util
+    db.commit()
+    db.refresh(mensaje)
+    return mensaje

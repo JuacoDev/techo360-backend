@@ -16,7 +16,7 @@ class Mensaje(BaseVector):
 
     id = Column(BigInteger, primary_key=True, index=True)
     conversacion_id = Column(
-        BigInteger, ForeignKey("conversaciones.id", ondelete="CASCADE"), nullable=False, index=True
+        BigInteger, ForeignKey("public.conversaciones.id", ondelete="CASCADE"), nullable=False, index=True
     )
     rol = Column(Text, nullable=False)
     contenido = Column(Text, nullable=False)
