@@ -10,8 +10,10 @@ from schemas.chatbot import (
     ActualizarFeedbackRequest,
     ConversacionResponse,
     CrearConversacionRequest,
+    CrearMensajeRequest,
     MensajeResponse,
 )
+from services.chatbot_service import agregar_mensaje, crear_conversacion
 
 router = APIRouter(
     prefix="/chatbot",
@@ -39,14 +41,7 @@ def crear_conversacion(
     db: Session = Depends(get_db_vector),
     current_user: MapCalorUser = Depends(get_current_user),
 ):
-    conversacion = Conversacion(
-        usuario_id=current_user.id,
-        consentimiento_entrenamiento=datos.consentimiento_entrenamiento,
-    )
-    db.add(conversacion)
-    db.commit()
-    db.refresh(conversacion)
-    return conversacion
+    return crear_conversacion(db, current_user.id, datos.consentimiento_entrenamiento)
 
 
 @router.get(
@@ -71,6 +66,40 @@ def listar_conversaciones(
         .order_by(Conversacion.fecha.desc())
         .all()
     )
+
+
+@router.post(
+    "/conversaciones/{conversacion_id}/mensajes",
+    response_model=MensajeResponse,
+    status_code=201,
+    summary="Agregar un mensaje a una conversacion existente",
+    description=(
+        "Usa la misma funcion de servicio (services/chatbot_service.py) "
+        "que el consumer de 'chatbot_eventos_persistencia' -- HTTP y "
+        "RabbitMQ terminan en el mismo mecanismo, ver AVISO en "
+        "chatbot_persistencia_consumer.py. Solo el dueno de la "
+        "conversacion puede agregarle mensajes."
+    ),
+    responses={
+        401: {"description": "Requiere sesión iniciada."},
+        404: {"description": "La conversacion no existe o no pertenece al usuario autenticado."},
+    },
+)
+def crear_mensaje(
+    conversacion_id: int,
+    datos: CrearMensajeRequest,
+    db: Session = Depends(get_db_vector),
+    current_user: MapCalorUser = Depends(get_current_user),
+):
+    conversacion = (
+        db.query(Conversacion)
+        .filter(Conversacion.id == conversacion_id, Conversacion.usuario_id == current_user.id)
+        .first()
+    )
+    if conversacion is None:
+        raise HTTPException(status_code=404, detail="Conversacion no encontrada.")
+
+    return agregar_mensaje(db, conversacion_id, datos.rol, datos.contenido)
 
 
 @router.patch(

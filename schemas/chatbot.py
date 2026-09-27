@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
@@ -21,6 +22,15 @@ class ConversacionResponse(BaseModel):
 
 class ActualizarFeedbackRequest(BaseModel):
     feedback_util: bool
+
+
+class CrearMensajeRequest(BaseModel):
+    # Literal en vez de str -- valida en la API (422 claro) en vez de
+    # dejar que el CHECK constraint de BD lo rechace como 500 (ver
+    # AVISO en models/mensaje.py sobre por que no se repite como Enum
+    # alla: aqui es validacion de entrada, no redefinicion del schema).
+    rol: Literal["usuario", "asistente"]
+    contenido: str
 
 
 class MensajeResponse(BaseModel):
