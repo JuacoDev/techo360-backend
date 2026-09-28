@@ -11,9 +11,12 @@ from schemas.chatbot import (
     ConversacionResponse,
     CrearConversacionRequest,
     CrearMensajeRequest,
+    EnviarMensajeRequest,
+    IntercambioResponse,
     MensajeResponse,
 )
 from services import chatbot_service
+from services.chatbot_rpc_client import ChatbotTimeoutError, solicitar_chatbot
 
 router = APIRouter(
     prefix="/chatbot",
@@ -100,6 +103,114 @@ def crear_mensaje(
         raise HTTPException(status_code=404, detail="Conversacion no encontrada.")
 
     return chatbot_service.agregar_mensaje(db, conversacion_id, datos.rol, datos.contenido)
+
+
+@router.get(
+    "/conversaciones/{conversacion_id}/mensajes",
+    response_model=list[MensajeResponse],
+    summary="Listar los mensajes de una conversacion existente",
+    description=(
+        "Devuelve todos los mensajes de la conversacion, ordenados por "
+        "fecha ascendente (para reabrir el historial de una "
+        "conversacion en el orden en que ocurrio)."
+    ),
+    responses={
+        401: {"description": "Requiere sesión iniciada."},
+        404: {"description": "La conversacion no existe o no pertenece al usuario autenticado."},
+    },
+)
+def listar_mensajes(
+    conversacion_id: int,
+    db: Session = Depends(get_db_vector),
+    current_user: MapCalorUser = Depends(get_current_user),
+):
+    conversacion = (
+        db.query(Conversacion)
+        .filter(Conversacion.id == conversacion_id, Conversacion.usuario_id == current_user.id)
+        .first()
+    )
+    if conversacion is None:
+        raise HTTPException(status_code=404, detail="Conversacion no encontrada.")
+
+    return (
+        db.query(Mensaje)
+        .filter(Mensaje.conversacion_id == conversacion_id)
+        .order_by(Mensaje.fecha.asc())
+        .all()
+    )
+
+
+@router.post(
+    "/conversaciones/{conversacion_id}/mensajes/enviar",
+    response_model=IntercambioResponse,
+    status_code=201,
+    summary="Enviar un mensaje real del usuario y obtener la respuesta del asistente",
+    description=(
+        "Persiste el mensaje del usuario, pide la respuesta al pool de "
+        "workers de chatbot via RPC sobre RabbitMQ (cola "
+        "'chatbot_requests', ver services/chatbot_rpc_client.py) y "
+        "persiste la respuesta del asistente en la misma conversacion. "
+        "El backend persiste sincronicamente aqui (decision del "
+        "26-sep-2026, ver core/config.py: 'el backend maneja TODA la "
+        "persistencia') -- por eso el consumer de "
+        "'chatbot_eventos_persistencia' ya no se dispara para este "
+        "camino (ver AVISO en techo360-chatbot/app/rabbitmq_consumer.py), "
+        "solo para el endpoint de pruebas locales POST /chatbot/send de "
+        "techo360-chatbot. La respuesta puede tardar varios segundos "
+        "(Ollama sin GPU en el VPS)."
+    ),
+    responses={
+        401: {"description": "Requiere sesión iniciada."},
+        404: {"description": "La conversacion no existe o no pertenece al usuario autenticado."},
+        503: {"description": "El asistente no esta disponible (Ollama caido o RabbitMQ inalcanzable)."},
+        504: {"description": "Ningun worker respondio a tiempo."},
+    },
+)
+async def enviar_mensaje(
+    conversacion_id: int,
+    datos: EnviarMensajeRequest,
+    db: Session = Depends(get_db_vector),
+    current_user: MapCalorUser = Depends(get_current_user),
+):
+    conversacion = (
+        db.query(Conversacion)
+        .filter(Conversacion.id == conversacion_id, Conversacion.usuario_id == current_user.id)
+        .first()
+    )
+    if conversacion is None:
+        raise HTTPException(status_code=404, detail="Conversacion no encontrada.")
+
+    mensaje_usuario = chatbot_service.agregar_mensaje(db, conversacion_id, "usuario", datos.contenido)
+
+    try:
+        respuesta = await solicitar_chatbot(
+            {
+                "mensaje": datos.contenido,
+                "usuario_id": current_user.id,
+                "consentimiento_entrenamiento": conversacion.consentimiento_entrenamiento,
+                "conversacion_id": conversacion_id,
+            }
+        )
+    except ChatbotTimeoutError as error:
+        raise HTTPException(status_code=504, detail=str(error)) from error
+    except Exception as error:
+        raise HTTPException(
+            status_code=503,
+            detail="No se pudo contactar al asistente. Intenta de nuevo en unos segundos.",
+        ) from error
+
+    if respuesta.get("status") != "ok":
+        tipo = respuesta.get("tipo")
+        detail = respuesta.get("detail") or "El asistente no pudo generar una respuesta."
+        if tipo == "ollama_no_disponible":
+            raise HTTPException(status_code=503, detail=detail)
+        raise HTTPException(status_code=502, detail=detail)
+
+    mensaje_asistente = chatbot_service.agregar_mensaje(
+        db, conversacion_id, "asistente", respuesta["response"]
+    )
+
+    return IntercambioResponse(mensaje_usuario=mensaje_usuario, mensaje_asistente=mensaje_asistente)
 
 
 @router.patch(

@@ -42,3 +42,15 @@ class MensajeResponse(BaseModel):
     contenido: str
     feedback_util: bool | None
     fecha: datetime
+
+
+class EnviarMensajeRequest(BaseModel):
+    contenido: str
+
+
+class IntercambioResponse(BaseModel):
+    # Los dos mensajes ya persistidos (usuario + asistente) del
+    # intercambio -- el cliente necesita el id real del mensaje del
+    # asistente para poder calificarlo despues (PATCH .../feedback).
+    mensaje_usuario: MensajeResponse
+    mensaje_asistente: MensajeResponse
