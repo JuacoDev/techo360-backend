@@ -37,6 +37,21 @@ INDICADOR_VIGENTE = "densidad_poblacional"
 MODELO_VIGENTE = "regresion-lineal-4puntos"
 ORIGEN_PROYECCION = "proyeccion-regresion-lineal-4puntos"
 
+# >>> Rango real cargado para densidad_poblacional (confirmado 28-sep-2026
+# con SQL directo contra MapCalorDB: min/max(yearM) agrupado por
+# originVar) <<<
+# La carga DANE ("DANE-proyeccion-poblacion-YYYY", 1104 municipios por
+# año) cubre 2024-2042 completos. GET /zonas ya usaba ge=2025 (el primer
+# año "futuro" con sentido para el Mapa de Proyeccion); ANIO_MAXIMO_ZONAS
+# es el tope real de arriba -- pedir un año posterior no tiene ningun
+# dato DANE que lo respalde, y antes se extrapolaba en silencio en vez de
+# rechazarlo. Si se vuelve a cargar DANE con mas años, este valor hay que
+# actualizarlo a mano (no hay forma de derivarlo sin una consulta a la
+# base, y este servicio no tiene acceso directo a MapCalorDB -- solo lo
+# tiene techo360-proyeccion via RPC).
+ANIO_MINIMO_ZONAS = 2025
+ANIO_MAXIMO_ZONAS = 2042
+
 # Traduce el "tipo" que pone el consumer de techo360-proyeccion en la
 # respuesta de error (ver app/rabbitmq_consumer.py de ese repo) al tipo
 # de excepcion que este router ya sabe mapear a un status HTTP.

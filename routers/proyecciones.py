@@ -2,10 +2,18 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from models.mapcalor_user import MapCalorUser
 from routers.auth import get_current_user
-from schemas.proyecciones import ProyeccionResponse, PuntoProyeccion, PuntoZona, ZonasResponse
+from schemas.proyecciones import (
+    ProyeccionResponse,
+    PuntoProyeccion,
+    PuntoZona,
+    RangoZonasResponse,
+    ZonasResponse,
+)
 from services.proyeccion_cache import proyeccion_cache
 from services.proyeccion_rpc_client import ProyeccionTimeoutError
 from services.proyeccion_service import (
+    ANIO_MAXIMO_ZONAS,
+    ANIO_MINIMO_ZONAS,
     IndicadorNoSoportadoError,
     INDICADOR_VIGENTE,
     MODELO_VIGENTE,
@@ -22,30 +30,20 @@ router = APIRouter(
     tags=["proyecciones"],
 )
 
-# >>> AVISO -- BLOQUEANTE para Mapa de Proyeccion (25-sep-2026), no deuda
-# tecnica suelta -- SIGUE APLICANDO tras T-104 (26-sep-2026) <<<
-# Este endpoint SIEMPRE calcula la regresion para el rango [desde, hasta]
-# pedido, sin verificar antes si ya existe un dato REAL en MapCalorDB
-# para alguno de esos años. Desde el 25-sep-2026, densidad_poblacional
-# tiene cobertura DANE real completa 2024-2042 (ver
-# ingestion/actualizar_densidad_dane.py) -- si a Manuel/Jeremy se les
-# asigna Mapa de Proyeccion y este endpoint se conecta al frontend tal
-# cual esta hoy, cualquier año pedido dentro de ese rango devolveria
-# "origen": "proyeccion-regresion-lineal-4puntos" (ver
-# services/proyeccion_service.py) en vez del dato real DANE que ya
-# existe -- viola la regla ya establecida en el proyecto de que un dato
-# real siempre gana sobre uno proyectado (ver PanelIndicadores.jsx en
-# techo360-frontend, mismo criterio).
-#
-# T-104 (GET /api/proyecciones/zonas, mas abajo) SI tiene una mitigacion
-# PARCIAL de este gap (ver AVISO en
-# techo360-proyeccion/app/services/proyeccion.py::calcular_zonas) -- pero
-# solo cubre años <= anio_actual del servidor (hoy 2026). Este endpoint
-# de UN municipio (GET /api/proyecciones/serie) NO tiene ni siquiera esa
-# mitigacion parcial todavia. Fix completo pendiente: antes de calcular
-# la regresion para un año, consultar si MapCalorDB ya tiene una fila
-# real (originVar NOT LIKE 'proyeccion-%' y NOT LIKE '%-proyeccion') para
-# ese codigo_municipio+año, y devolverla tal cual.
+# >>> RESUELTO -- ya no bloqueante (verificado 28-sep-2026) <<<
+# Este endpoint (GET /api/proyecciones/serie, UN municipio) usaba a
+# ciegas la regresion para el rango [desde, hasta] pedido, sin verificar
+# antes si ya existia un dato REAL en MapCalorDB para alguno de esos años
+# -- mismo gap que tenia GET /api/proyecciones/zonas. Ambos quedaron
+# resueltos en techo360-proyeccion (commit 27c02cd de JrGG22, 26-sep-2026):
+# calcular_serie_proyectada()/calcular_zonas() (ver
+# app/services/proyeccion.py de ese repo) consultan
+# obtener_datos_municipio_para_anios()/obtener_datos_todos_municipios_para_anio()
+# -- SIN el tope `yearM <= anio_actual` -- y sobreescriben con el dato
+# real cualquier año de la respuesta que ya tenga fila real en MapCalorDB.
+# Verificado en vivo contra la BD real: /serie para 05001 2027-2035
+# devuelve los mismos valores exactos de "DANE-proyeccion-poblacion-YYYY",
+# no una recta.
 
 
 @router.get(
@@ -142,13 +140,27 @@ async def obtener_proyeccion_municipio(
     ),
     responses={
         401: {"description": "Requiere autenticación."},
-        422: {"description": "El indicador no es válido."},
+        422: {
+            "description": (
+                "El indicador no es válido, o el año está fuera del rango "
+                "con datos reales cargados (ver GET /api/proyecciones/rango)."
+            )
+        },
         503: {"description": "El servicio de proyección no está disponible."},
         504: {"description": "El servicio de proyección no respondió a tiempo."},
     },
 )
 async def obtener_zonas_proyeccion(
-    anio: int = Query(..., ge=2025, description="Año del choropleth."),
+    anio: int = Query(
+        ...,
+        ge=ANIO_MINIMO_ZONAS,
+        le=ANIO_MAXIMO_ZONAS,
+        description=(
+            f"Año del choropleth. Rango con datos DANE reales cargados: "
+            f"{ANIO_MINIMO_ZONAS}-{ANIO_MAXIMO_ZONAS} (ver GET "
+            f"/api/proyecciones/rango)."
+        ),
+    ),
     indicador: str = Query(
         default=INDICADOR_VIGENTE,
         pattern=r"^densidad_poblacional$",
@@ -176,4 +188,29 @@ async def obtener_zonas_proyeccion(
         "anio": anio,
         "modelo": MODELO_VIGENTE,
         "zonas": zonas,
+    }
+
+
+@router.get(
+    "/rango",
+    response_model=RangoZonasResponse,
+    summary="Rango de años válido para GET /zonas",
+    description=(
+        "Expone el rango de años con datos DANE reales cargados para "
+        "densidad_poblacional (ver ANIO_MINIMO_ZONAS/ANIO_MAXIMO_ZONAS en "
+        "services/proyeccion_service.py), para que el frontend no tenga "
+        "que hardcodear el tope del selector de año -- si se vuelve a "
+        "cargar DANE con más años, solo hay que actualizar esas dos "
+        "constantes y este endpoint (y el `le=` de GET /zonas) quedan "
+        "sincronizados automáticamente."
+    ),
+    responses={401: {"description": "Requiere autenticación."}},
+)
+async def obtener_rango_zonas(
+    current_user: MapCalorUser = Depends(get_current_user),
+):
+    return {
+        "indicador": INDICADOR_VIGENTE,
+        "anio_minimo": ANIO_MINIMO_ZONAS,
+        "anio_maximo": ANIO_MAXIMO_ZONAS,
     }

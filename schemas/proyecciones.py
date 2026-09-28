@@ -31,3 +31,9 @@ class ZonasResponse(BaseModel):
     anio: int
     modelo: str
     zonas: list[PuntoZona]
+
+
+class RangoZonasResponse(BaseModel):
+    indicador: str
+    anio_minimo: int
+    anio_maximo: int
