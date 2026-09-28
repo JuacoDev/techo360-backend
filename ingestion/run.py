@@ -104,15 +104,32 @@ def run(
     valores_anio_anterior = valores_anio_anterior or {}
     alertas_ya_enviadas: set[tuple[str, str]] = set()
 
-    def _notificar(asunto: str, mensaje: str):
-        clave = (asunto,)  # dedup por asunto (ya incluye el nombre de la fuente)
-        if clave in alertas_ya_enviadas:
-            logger.info(f"(alerta repetida omitida, ya se avisó en esta corrida: {asunto})")
-            return
-        alertas_ya_enviadas.add(clave)
-        logger.error(f"ALERTA -> {asunto}: {mensaje}")
-        if notificar_admin is not None:
+  alertas_ya_enviadas: set[tuple[str, str]] = set()
+
+def _notificar(asunto: str, mensaje: str):
+    clave = (asunto, mensaje)
+
+    if clave in alertas_ya_enviadas:
+        logger.info(
+            f"(alerta repetida omitida, ya se avisó en esta corrida: {asunto})"
+        )
+        return
+
+    alertas_ya_enviadas.add(clave)
+
+    logger.error(
+        f"ALERTA DE ACTUALIZACION DE DATOS -> {asunto}: {mensaje}"
+    )
+
+    if notificar_admin is not None:
+        try:
             notificar_admin(asunto, mensaje)
+        except Exception as e:
+            logger.error(
+                f"No fue posible enviar la alerta al administrador. "
+                f"Asunto: {asunto}. "
+                f"Error: {type(e).__name__}: {e}"
+            )
 
     resultados = {"ok": [], "rechazados": [], "advertencias": [], "bloqueadas": [], "errores": []}
 
@@ -155,11 +172,25 @@ def run(
                         try:
                             guardar_indicador(database_url, r)
                         except Exception as e:
-                            _notificar(
-                                f"Error guardando en BD ({adapter.nombre})",
-                                f"Registro de '{r.variable}' en {r.entidad_territorial} paso "
-                                f"validacion pero fallo al guardar: {e}",
-                            )
+    mensaje = (
+        f"Registro de '{r.variable}' en {r.entidad_territorial} "
+        f"pasó validación pero falló al guardar.\n"
+        f"Fuente: {adapter.nombre}\n"
+        f"Variable: {r.variable}\n"
+        f"Entidad territorial: {r.entidad_territorial}\n"
+        f"Año: {r.anio}\n"
+        f"Tipo de error: {type(e).__name__}\n"
+        f"Detalle: {e}"
+    )
+
+    _notificar(
+        f"Error guardando en BD ({adapter.nombre})",
+        mensaje,
+    )
+
+    resultados["errores"].append(
+        (r.variable, adapter.nombre, mensaje)
+    )
                 except ValidacionError as e:
                     logger.warning(f"Registro rechazado: {e}")
                     resultados["rechazados"].append(str(e))
@@ -167,15 +198,63 @@ def run(
             resultados["ok"].append((variable, adapter.nombre, aceptados, len(registros) - aceptados))
 
         except EsquemaCambiadoError as e:
-            _notificar(f"Cambio de esquema en {adapter.nombre}", str(e))
-            resultados["errores"].append((variable, adapter.nombre, str(e)))
-        except DataSourceUnavailableError as e:
-            logger.warning(f"[{adapter.nombre}] '{variable}' -- BLOQUEADA: {e}")
-            resultados["bloqueadas"].append((variable, adapter.nombre, str(e)))
-        except Exception as e:
-            _notificar(f"Error inesperado en {adapter.nombre}", f"Variable '{variable}': {e}")
-            resultados["errores"].append((variable, adapter.nombre, str(e)))
+    mensaje = (
+        f"Cambió el esquema de la fuente de datos.\n"
+        f"Fuente: {adapter.nombre}\n"
+        f"Variable: {variable}\n"
+        f"Año: {anio}\n"
+        f"Tipo de error: {type(e).__name__}\n"
+        f"Detalle: {e}"
+    )
 
+    _notificar(
+        f"Cambio de esquema en {adapter.nombre}",
+        mensaje,
+    )
+
+    resultados["errores"].append(
+        (variable, adapter.nombre, mensaje)
+    )
+        except DataSourceUnavailableError as e:
+    mensaje = (
+        f"La fuente de datos no está disponible durante la actualización.\n"
+        f"Fuente: {adapter.nombre}\n"
+        f"Variable: {variable}\n"
+        f"Año: {anio}\n"
+        f"Tipo de error: {type(e).__name__}\n"
+        f"Detalle: {e}"
+    )
+
+    logger.warning(
+        f"[{adapter.nombre}] '{variable}' -- BLOQUEADA: {e}"
+    )
+
+    _notificar(
+        f"Fuente no disponible ({adapter.nombre})",
+        mensaje,
+    )
+
+    resultados["bloqueadas"].append(
+        (variable, adapter.nombre, str(e))
+    )
+        except Exception as e:
+    mensaje = (
+        f"Error inesperado durante la actualización.\n"
+        f"Fuente: {adapter.nombre}\n"
+        f"Variable: {variable}\n"
+        f"Año: {anio}\n"
+        f"Tipo de error: {type(e).__name__}\n"
+        f"Detalle: {e}"
+    )
+
+    _notificar(
+        f"Error inesperado en {adapter.nombre}",
+        mensaje,
+    )
+
+    resultados["errores"].append(
+        (variable, adapter.nombre, mensaje)
+    )
     # ---------------- Variables de tipo geometria ----------------
     adaptadores_geometria = {}
     for variable, adapter_cls in plan_geometria.items():
@@ -192,14 +271,42 @@ def run(
             if database_url is not None and registros:
                 try:
                     reemplazar_vias(database_url, registros)
-                except Exception as e:
-                    _notificar(
-                        f"Error guardando vias en BD ({adapter.nombre})",
-                        f"{len(registros)} segmentos obtenidos pero fallo el guardado: {e}",
-                    )
-        except Exception as e:
-            _notificar(f"Error inesperado en {adapter.nombre}", f"Variable '{variable}': {e}")
-            resultados["errores"].append((variable, adapter.nombre, str(e)))
+               except Exception as e:
+    mensaje = (
+        f"{len(registros)} segmentos obtenidos pero falló el guardado.\n"
+        f"Fuente: {adapter.nombre}\n"
+        f"Variable: {variable}\n"
+        f"Año: {anio}\n"
+        f"Tipo de error: {type(e).__name__}\n"
+        f"Detalle: {e}"
+    )
+
+    _notificar(
+        f"Error guardando vias en BD ({adapter.nombre})",
+        mensaje,
+    )
+
+    resultados["errores"].append(
+        (variable, adapter.nombre, mensaje)
+    )
+       except Exception as e:
+    mensaje = (
+        f"Error inesperado durante la actualización de geometría.\n"
+        f"Fuente: {adapter.nombre}\n"
+        f"Variable: {variable}\n"
+        f"Año: {anio}\n"
+        f"Tipo de error: {type(e).__name__}\n"
+        f"Detalle: {e}"
+    )
+
+    _notificar(
+        f"Error inesperado en {adapter.nombre}",
+        mensaje,
+    )
+
+    resultados["errores"].append(
+        (variable, adapter.nombre, mensaje)
+    )
 
     logger.info("=" * 60)
     logger.info(
@@ -239,12 +346,35 @@ def backfill_historico(
                 database_url=database_url,
                 notificar_admin=notificar_admin,
             )
-        except Exception as e:
-            mensaje = f"Backfill historico: fallo inesperado en el año {anio}, variables {variables}: {e}"
-            logger.error(mensaje)
-            if notificar_admin is not None:
-                notificar_admin(f"Error en backfill historico (año {anio})", mensaje)
-            resultados_por_anio[anio] = {"error": str(e)}
+       except Exception as e:
+    mensaje = (
+        f"Backfill historico: fallo inesperado.\n"
+        f"Año: {anio}\n"
+        f"Variables: {variables}\n"
+        f"Tipo de error: {type(e).__name__}\n"
+        f"Detalle: {e}"
+    )
+
+    logger.error(mensaje)
+
+    if notificar_admin is not None:
+        try:
+            notificar_admin(
+                f"Error en backfill historico (año {anio})",
+                mensaje,
+            )
+        except Exception as error_notificacion:
+            logger.error(
+                f"No fue posible enviar la notificación del backfill: "
+                f"{type(error_notificacion).__name__}: "
+                f"{error_notificacion}"
+            )
+
+    resultados_por_anio[anio] = {
+        "error": str(e)
+    }
+
+    # No se relanza -- se sigue con el resto de los años.
             # No se relanza -- se sigue con el resto de los años.
 
     return resultados_por_anio
