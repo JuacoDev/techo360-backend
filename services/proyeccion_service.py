@@ -195,7 +195,10 @@ async def _obtener_limites_base_cacheados(db: Session) -> dict:
     if cacheado is not None:
         return cacheado
 
-    limites = calcular_limites_base(db, ANIO_BASE_SCORE)
+    # calcular_limites_base es sincrona (SQLAlchemy Session, no async) --
+    # to_thread evita bloquear el loop de eventos mientras corre la
+    # consulta SQL, igual que obtener_deficit_base() mas abajo.
+    limites = await asyncio.to_thread(calcular_limites_base, db, ANIO_BASE_SCORE)
     await proyeccion_cache.guardar_limites_base(ANIO_BASE_SCORE, limites)
     return limites
 
@@ -223,7 +226,7 @@ async def calcular_zonas_score_privacion(anio: int, db: Session) -> list[PuntoZo
     nunca se cachea ni se devuelve un score a medias con solo uno de los
     dos insumos proyectados."""
     limites = await _obtener_limites_base_cacheados(db)
-    deficit_base = obtener_deficit_base(db, ANIO_BASE_SCORE)
+    deficit_base = await asyncio.to_thread(obtener_deficit_base, db, ANIO_BASE_SCORE)
 
     resultados = await asyncio.gather(
         calcular_zonas(VARIABLE_ACUEDUCTO, anio),
