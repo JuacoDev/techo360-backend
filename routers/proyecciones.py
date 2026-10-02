@@ -8,6 +8,7 @@ from schemas.proyecciones import (
     PuntoZona,
     RangoZonasResponse,
     ZonasResponse,
+    RangoDisponibleResponse,
 )
 from services.proyeccion_cache import proyeccion_cache
 from services.proyeccion_rpc_client import ProyeccionTimeoutError
@@ -211,6 +212,27 @@ async def obtener_rango_zonas(
 ):
     return {
         "indicador": INDICADOR_VIGENTE,
+        "anio_minimo": ANIO_MINIMO_ZONAS,
+        "anio_maximo": ANIO_MAXIMO_ZONAS,
+    }
+
+@router.get(
+    "/rango-disponible",
+    response_model=RangoDisponibleResponse,
+    summary="Obtener rango de años disponible para proyecciones",
+    description=(
+        "Devuelve el año mínimo y máximo disponibles para las "
+        "proyecciones, permitiendo que el frontend construya el "
+        "selector de año sin hardcodear el rango."
+    ),
+    responses={
+        401: {"description": "Requiere autenticación."},
+    },
+)
+async def obtener_rango_disponible(
+    current_user: MapCalorUser = Depends(get_current_user),
+):
+    return {
         "anio_minimo": ANIO_MINIMO_ZONAS,
         "anio_maximo": ANIO_MAXIMO_ZONAS,
     }
