@@ -17,25 +17,49 @@ class ProyeccionCache:
     municipio por separado) -- mismo patron que services/otp_service.py
     (un cliente de Redis propio, no compartido via app.state). Cache miss
     dispara el RPC real contra techo360-proyeccion; cache hit responde
-    directo, sin tocar RabbitMQ ni la BD."""
+    directo, sin tocar RabbitMQ ni la BD.
+
+    >>> AVISO -- clave de zonas versionada e indicador-aware (score de
+    >>> privacion por proyeccion) <<<
+    La clave vieja (`proyeccion:zonas:{anio}`) no incluia el indicador
+    porque solo existia un indicador (densidad_poblacional). Ahora que
+    /api/proyecciones/zonas acepta mas de uno (densidad_poblacional,
+    score_privacion), una clave sin indicador mezclaria datos de uno con
+    el otro bajo el mismo anio. La clave nueva (`proyeccion:v2:zonas:
+    {indicador}:{anio}`) nunca lee la vieja -- las entradas viejas que
+    sigan vivas en Redis (hasta por TTL_SEGUNDOS) simplemente quedan sin
+    uso y expiran solas, no se leen ni se borran a mano."""
 
     def __init__(self):
         self._redis = aioredis.from_url(settings.redis_url, decode_responses=True)
 
     @staticmethod
-    def _clave_zonas(anio: int) -> str:
-        return f"proyeccion:zonas:{anio}"
+    def _clave_zonas(indicador: str, anio: int) -> str:
+        return f"proyeccion:v2:zonas:{indicador}:{anio}"
 
     @staticmethod
     def _clave_serie(codigo_municipio: str, desde: int, hasta: int) -> str:
         return f"proyeccion:serie:{codigo_municipio}:{desde}:{hasta}"
 
-    async def obtener_zonas(self, anio: int) -> list[dict] | None:
-        crudo = await self._redis.get(self._clave_zonas(anio))
+    @staticmethod
+    def _clave_limites_base(anio_base: int) -> str:
+        return f"proyeccion:v2:limites_base:{anio_base}"
+
+    async def obtener_zonas(self, indicador: str, anio: int) -> list[dict] | None:
+        crudo = await self._redis.get(self._clave_zonas(indicador, anio))
         return json.loads(crudo) if crudo is not None else None
 
-    async def guardar_zonas(self, anio: int, zonas: list[dict]) -> None:
-        await self._redis.set(self._clave_zonas(anio), json.dumps(zonas), ex=TTL_SEGUNDOS)
+    async def guardar_zonas(self, indicador: str, anio: int, zonas: list[dict]) -> None:
+        await self._redis.set(self._clave_zonas(indicador, anio), json.dumps(zonas), ex=TTL_SEGUNDOS)
+
+    async def obtener_limites_base(self, anio_base: int) -> dict | None:
+        crudo = await self._redis.get(self._clave_limites_base(anio_base))
+        return json.loads(crudo) if crudo is not None else None
+
+    async def guardar_limites_base(self, anio_base: int, limites: dict) -> None:
+        await self._redis.set(
+            self._clave_limites_base(anio_base), json.dumps(limites), ex=TTL_SEGUNDOS
+        )
 
     async def obtener_serie(self, codigo_municipio: str, desde: int, hasta: int) -> list[dict] | None:
         crudo = await self._redis.get(self._clave_serie(codigo_municipio, desde, hasta))

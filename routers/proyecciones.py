@@ -1,5 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy.orm import Session
 
+from db.session import get_db
 from models.mapcalor_user import MapCalorUser
 from routers.auth import get_current_user
 from schemas.proyecciones import (
@@ -14,6 +16,7 @@ from services.proyeccion_rpc_client import ProyeccionTimeoutError
 from services.proyeccion_service import (
     ANIO_MAXIMO_ZONAS,
     ANIO_MINIMO_ZONAS,
+    INDICADOR_SCORE_PRIVACION,
     IndicadorNoSoportadoError,
     INDICADOR_VIGENTE,
     MODELO_VIGENTE,
@@ -22,6 +25,7 @@ from services.proyeccion_service import (
     RangoProyeccionInvalidoError,
     calcular_proyeccion,
     calcular_zonas,
+    calcular_zonas_score_privacion,
 )
 
 
@@ -129,14 +133,20 @@ async def obtener_proyeccion_municipio(
 @router.get(
     "/zonas",
     response_model=ZonasResponse,
-    summary="Choropleth completo de densidad_poblacional para un año (T-104)",
+    summary="Choropleth completo de densidad_poblacional o score_privacion para un año (T-104)",
     description=(
-        "Devuelve el valor (real o proyectado) de densidad_poblacional "
-        "para TODOS los municipios en un año dado, en una sola "
-        "solicitud -- ver techo360-proyeccion/app/services/proyeccion.py"
-        "::calcular_zonas (una consulta SQL + regresion vectorizada, no "
-        "un loop de ~1105 llamadas individuales). Respuesta cacheada en "
-        "Redis 24h por año -- ver services/proyeccion_cache.py."
+        "Devuelve el valor (real o proyectado) de densidad_poblacional, "
+        "o el score de privación compuesto, para TODOS los municipios en "
+        "un año dado, en una sola solicitud -- ver "
+        "techo360-proyeccion/app/services/proyeccion.py::calcular_zonas "
+        "(una consulta SQL + regresion vectorizada, no un loop de ~1105 "
+        "llamadas individuales). indicador=score_privacion combina "
+        "acueducto + alcantarillado proyectados (2 RPC en paralelo) con "
+        "deficit_habitacional_cuantitativo fijo del año base (no se "
+        "proyecta: viene de un censo fijo, CNPV 2018) -- ver "
+        "services/proyeccion_service.py::calcular_zonas_score_privacion. "
+        "Respuesta cacheada en Redis 24h por (indicador, año) -- ver "
+        "services/proyeccion_cache.py."
     ),
     responses={
         401: {"description": "Requiere autenticación."},
@@ -163,17 +173,21 @@ async def obtener_zonas_proyeccion(
     ),
     indicador: str = Query(
         default=INDICADOR_VIGENTE,
-        pattern=r"^densidad_poblacional$",
-        description="Indicador actualmente soportado.",
+        pattern=r"^(densidad_poblacional|score_privacion)$",
+        description="Indicadores soportados: densidad_poblacional, score_privacion.",
     ),
+    db: Session = Depends(get_db),
     current_user: MapCalorUser = Depends(get_current_user),
 ):
-    cacheado = await proyeccion_cache.obtener_zonas(anio)
+    cacheado = await proyeccion_cache.obtener_zonas(indicador, anio)
     if cacheado is not None:
         zonas = [PuntoZona(**zona) for zona in cacheado]
     else:
         try:
-            zonas = await calcular_zonas(indicador, anio)
+            if indicador == INDICADOR_SCORE_PRIVACION:
+                zonas = await calcular_zonas_score_privacion(anio, db)
+            else:
+                zonas = await calcular_zonas(indicador, anio)
         except IndicadorNoSoportadoError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
         except ProyeccionTimeoutError as error:
@@ -181,7 +195,7 @@ async def obtener_zonas_proyeccion(
         except ModeloNoDisponibleError as error:
             raise HTTPException(status_code=503, detail=str(error)) from error
 
-        await proyeccion_cache.guardar_zonas(anio, [zona.model_dump() for zona in zonas])
+        await proyeccion_cache.guardar_zonas(indicador, anio, [zona.model_dump() for zona in zonas])
 
     return {
         "indicador": indicador,

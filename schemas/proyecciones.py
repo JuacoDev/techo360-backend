@@ -16,7 +16,12 @@ class ProyeccionResponse(BaseModel):
 
 class PuntoZona(BaseModel):
     codigo_municipio: str
-    valor: float
+    # None solo para indicador="score_privacion": si falta cualquiera de
+    # los 3 insumos del score para ese municipio/año, se devuelve null en
+    # vez de un numero (mismo criterio que score_privacion en
+    # GET /api/zonas -- "sin dato", no "privacion cero"). Para
+    # densidad_poblacional sigue siendo siempre un float, como antes.
+    valor: float | None
     # T-104: distingue si el valor es un dato real ya cargado (el año
     # pedido cae dentro del rango que techo360-proyeccion ya trae como
     # "real") o si se calculo por regresion -- mismo criterio de
