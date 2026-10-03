@@ -10,7 +10,7 @@ from aio_pika.abc import AbstractIncomingMessage, AbstractRobustConnection
 from core.config import settings
 
 REQUEST_QUEUE = "proyeccion_requests"
-RPC_TIMEOUT_SECONDS = 12.0
+RPC_TIMEOUT_SECONDS = 200.0
 
 _connection: AbstractRobustConnection | None = None
 _connection_lock = asyncio.Lock()

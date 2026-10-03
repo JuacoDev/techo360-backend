@@ -42,3 +42,7 @@ class RangoZonasResponse(BaseModel):
     indicador: str
     anio_minimo: int
     anio_maximo: int
+
+class RangoDisponibleResponse(BaseModel):
+    anio_minimo: int
+    anio_maximo: int
