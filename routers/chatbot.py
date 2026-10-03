@@ -71,52 +71,6 @@ def listar_conversaciones(
     )
 
 
-@router.get(
-    "/conversaciones/{conversacion_id}/mensajes",
-    response_model=list[MensajeResponse],
-    summary="Obtener los mensajes de una conversación",
-    description=(
-        "Devuelve todos los mensajes de una conversación existente, "
-        "ordenados desde el más antiguo hasta el más reciente. "
-        "Solo el propietario de la conversación puede consultar sus mensajes."
-    ),
-    responses={
-        401: {"description": "Requiere sesión iniciada."},
-        404: {
-            "description": (
-                "La conversación no existe o no pertenece "
-                "al usuario autenticado."
-            )
-        },
-    },
-)
-def listar_mensajes_conversacion(
-    conversacion_id: int,
-    db: Session = Depends(get_db_vector),
-    current_user: MapCalorUser = Depends(get_current_user),
-):
-    conversacion = (
-        db.query(Conversacion)
-        .filter(
-            Conversacion.id == conversacion_id,
-            Conversacion.usuario_id == current_user.id,
-        )
-        .first()
-    )
-
-    if conversacion is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Conversación no encontrada.",
-        )
-
-    return (
-        db.query(Mensaje)
-        .filter(Mensaje.conversacion_id == conversacion_id)
-        .order_by(Mensaje.fecha.asc())
-        .all()
-    )
-
 @router.post(
     "/conversaciones/{conversacion_id}/mensajes",
     response_model=MensajeResponse,
