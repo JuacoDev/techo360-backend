@@ -8,6 +8,7 @@ from db.session import get_db
 from models.mapcalor_user import MapCalorUser
 from routers.auth import get_current_user
 from schemas.zonas import GeoJSONFeatureCollection
+from services.score_privacion import calcular_score_privacion, normalizar_minmax
 
 
 router = APIRouter(
@@ -123,38 +124,10 @@ CODIGO_AGREGADO_NACIONAL_TERRIDATA = "01001"
 # deficit_habitacional_total sigue siendo una de las 7 variables que se
 # exponen en properties.indicadores y se muestran en el panel -- no se
 # oculta ni se deja de calcular.
-VARIABLE_ACUEDUCTO = "cobertura_acueducto"
-VARIABLE_ALCANTARILLADO = "cobertura_alcantarillado"
-VARIABLE_DEFICIT_COMPUESTO = "deficit_habitacional_cuantitativo"
-
-
-def _normalizar_minmax(valor: float | None, minimo: float | None, maximo: float | None) -> float | None:
-    """Normalizacion min-max a [0, 1]. None si falta cualquier insumo o
-    si el rango es degenerado (todas las filas con el mismo valor -- no
-    hay forma de normalizar sin inventar un 0 u 1 arbitrario)."""
-    if valor is None or minimo is None or maximo is None or maximo == minimo:
-        return None
-    return round((valor - minimo) / (maximo - minimo), 4)
-
-
-def _score_privacion(indicadores_zona: dict) -> float | None:
-    """Score compuesto de privacion (0=mejor, 1=peor), promedio simple
-    1/3 + 1/3 + 1/3 de acueducto invertido, alcantarillado invertido, y
-    deficit habitacional CUANTITATIVO (sin invertir -- ver el aviso de
-    doble conteo arriba: el cuantitativo, a diferencia del total, no
-    contiene componentes de acueducto/alcantarillado). None si falta
-    cualquiera de los 3 insumos -- incluye el caso MpCodigo=00000 (Area
-    en Litigio Cauca-Huila), que no tiene fila real en mapcalordb para
-    ninguna variable, asi que cae aqui de forma natural sin caso
-    especial."""
-    acueducto = indicadores_zona.get(VARIABLE_ACUEDUCTO, {}).get("score_normalizado")
-    alcantarillado = indicadores_zona.get(VARIABLE_ALCANTARILLADO, {}).get("score_normalizado")
-    deficit = indicadores_zona.get(VARIABLE_DEFICIT_COMPUESTO, {}).get("score_normalizado")
-
-    if acueducto is None or alcantarillado is None or deficit is None:
-        return None
-
-    return round((1 - acueducto) / 3 + (1 - alcantarillado) / 3 + deficit / 3, 4)
+# normalizar_minmax()/calcular_score_privacion() se movieron a
+# services/score_privacion.py (modulo compartido con routers/proyecciones.py
+# para el score de privacion por proyeccion) -- mismo codigo, mismo
+# comportamiento, solo cambio de ubicacion e import.
 
 
 @router.get(
@@ -299,7 +272,7 @@ def obtener_zonas(
                     # por UNA variable elegida por el usuario, en vez
                     # del score compuesto. NO invertida -- es el valor
                     # crudo reescalado, sin semantica de "privacion".
-                    "score_normalizado": _normalizar_minmax(valor, minimo, maximo),
+                    "score_normalizado": normalizar_minmax(valor, minimo, maximo),
                 }
         else:  # último valor disponible para departamentos
             query_indicadores_depto = text("""
@@ -331,7 +304,7 @@ def obtener_zonas(
             # >>> AVISO -- score_privacion a nivel departamento (T-?, 26-sep-2026) <<<
             # Se reusa LITERALMENTE el mismo score_privacion ya calculado
             # por municipio (mismos insumos min-max que la rama
-            # nivel=municipio, misma _score_privacion()) -- no se
+            # nivel=municipio, misma calcular_score_privacion()) -- no se
             # recalcula un min-max nuevo a nivel departamento, para que
             # sea "el mismo score", como se pidio explicitamente. Esto es
             # una consulta SEPARADA de la de arriba (que solo trae UN
@@ -363,7 +336,7 @@ def obtener_zonas(
                 valor = float(fila["valuevar"]) if fila["valuevar"] is not None else None
                 minimo, maximo = minmax_por_variable_score.get(variable, (None, None))
                 indicadores_por_municipio_score.setdefault(codigo_mun, {})[variable] = {
-                    "score_normalizado": _normalizar_minmax(valor, minimo, maximo),
+                    "score_normalizado": normalizar_minmax(valor, minimo, maximo),
                 }
 
             # >>> AVISO -- ponderacion SIMPLE, no por poblacion (decision
@@ -381,7 +354,7 @@ def obtener_zonas(
             # valido.
             scores_por_departamento: dict[str, list[float]] = {}
             for codigo_mun, indicadores_mun in indicadores_por_municipio_score.items():
-                score_mun = _score_privacion(indicadores_mun)
+                score_mun = calcular_score_privacion(indicadores_mun)
                 if score_mun is None:
                     continue
                 codigo_depto = str(codigo_mun).strip().zfill(5)[:2]
@@ -431,7 +404,7 @@ def obtener_zonas(
                 # para MpCodigo=00000 (Area en Litigio) de forma natural,
                 # ya que esa zona no tiene score_normalizado en ninguna
                 # de las 3 variables que entran al compuesto.
-                properties["score_privacion"] = _score_privacion(properties["indicadores"])
+                properties["score_privacion"] = calcular_score_privacion(properties["indicadores"])
             else:
                 # Promedio simple de los score_privacion municipales del
                 # departamento (ver AVISO arriba) -- None (no 0) si
