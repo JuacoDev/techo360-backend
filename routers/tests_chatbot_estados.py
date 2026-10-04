@@ -9,12 +9,14 @@ Uso:
 import unittest
 from datetime import datetime, timezone
 from types import SimpleNamespace
+import asyncio
 from unittest.mock import patch
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from core.config import Settings
+from db.session import get_db
 from db.session_vector import get_db_vector
 from routers import chatbot as router_chatbot
 from routers.auth import get_current_user
@@ -25,10 +27,12 @@ USUARIO = SimpleNamespace(id=7)
 CONVERSACION = SimpleNamespace(id=1, usuario_id=7, consentimiento_entrenamiento=False)
 
 
-def _msg(mid, rol, estado, contenido="hola", detalle=None):
+def _msg(mid, rol, estado, contenido="hola", detalle=None, duenio=7, intentos=0):
+    """`duenio`: id del usuario dueño de la conversacion del mensaje."""
     return SimpleNamespace(
         id=mid, conversacion_id=1, rol=rol, contenido=contenido, feedback_util=None,
         fecha=datetime(2026, 10, 4, tzinfo=timezone.utc), estado=estado, error_detalle=detalle,
+        duenio=duenio, intentos=intentos,
     )
 
 
@@ -38,6 +42,10 @@ class EstadosFalso:
     SIN_RESOLVER = estados_real.SIN_RESOLVER
     DETALLE_TIMEOUT = estados_real.DETALLE_TIMEOUT
     DETALLE_COLGADO = estados_real.DETALLE_COLGADO
+    PENDIENTE = estados_real.PENDIENTE
+    PROCESANDO = estados_real.PROCESANDO
+    ERROR = estados_real.ERROR
+    RESPONDIDO = estados_real.RESPONDIDO
     CANCELADO = estados_real.CANCELADO
     ConversacionBloqueada = estados_real.ConversacionBloqueada
 
@@ -54,6 +62,9 @@ class EstadosFalso:
         self._siguiente += 1
         return self._siguiente
 
+    def _propio(self, m, uid):
+        return m is not None and m.duenio == uid
+
     def barrer_colgados(self, db, minutos=4):
         self.llamadas.append("barrer_colgados")
         return 0
@@ -68,46 +79,62 @@ class EstadosFalso:
             raise estados_real.ConversacionBloqueada(existente)
         return self.poner(_msg(self._nuevo_id(), "usuario", "pendiente", contenido))
 
-    def _cambiar(self, mid, desde, hacia, detalle=None, usuario_id=None):
+    def _cambiar(self, mid, desde, hacia, detalle=None, uid=None, nuevo_intento=False, intento=None):
         m = self.mensajes.get(mid)
         if m is None or m.rol != "usuario" or m.estado not in desde:
             return None
+        if uid is not None and not self._propio(m, uid):
+            return None
+        if intento is not None and m.intentos != intento:
+            return None
         m.estado, m.error_detalle = hacia, detalle
+        if nuevo_intento:
+            m.intentos += 1
         return m
 
     def marcar_procesando(self, db, mid):
-        return self._cambiar(mid, ("pendiente",), "procesando")
+        return self._cambiar(mid, ("pendiente",), "procesando", nuevo_intento=True)
 
     def reintentar(self, db, mid, uid):
         self.llamadas.append("reintentar")
-        return self._cambiar(mid, ("error", "cancelado"), "procesando")
+        return self._cambiar(mid, ("error", "cancelado"), "procesando", uid=uid, nuevo_intento=True)
 
     def cancelar(self, db, mid, uid):
-        return self._cambiar(mid, ("pendiente", "procesando", "error"), "cancelado")
+        return self._cambiar(mid, ("pendiente", "procesando", "error"), "cancelado", uid=uid)
 
-    def marcar_error(self, db, mid, detalle):
-        return self._cambiar(mid, ("pendiente", "procesando"), "error", detalle)
+    def marcar_error(self, db, mid, detalle, intento=None):
+        return self._cambiar(mid, ("pendiente", "procesando"), "error", detalle, intento=intento)
 
-    def cerrar_respondido(self, db, mid, contenido):
-        usuario = self._cambiar(mid, ("procesando",), "respondido")
+    def cerrar_respondido(self, db, mid, contenido, intento=None):
+        usuario = self._cambiar(mid, ("procesando",), "respondido", intento=intento)
         if usuario is None:
             return None
-        return usuario, self.poner(_msg(self._nuevo_id(), "asistente", "respondido", contenido))
+        return usuario, self.poner(_msg(self._nuevo_id(), "asistente", "respondido", contenido, duenio=usuario.duenio))
 
     def obtener_de_usuario(self, db, mid, uid):
-        return self.mensajes.get(mid)
+        m = self.mensajes.get(mid)
+        return m if self._propio(m, uid) else None  # de otro usuario = como si no existiera
 
     def eliminar(self, db, mid, uid):
         m = self.mensajes.get(mid)
-        if m is not None and m.rol == "usuario" and m.estado in ("pendiente", "error", "cancelado"):
+        if not self._propio(m, uid):
+            return "no_encontrado"
+        if m.rol == "usuario" and m.estado in ("pendiente", "error", "cancelado"):
             del self.mensajes[mid]
             return "eliminado"
-        if m is not None and m.rol == "usuario" and m.estado == "procesando":
+        if m.rol == "usuario" and m.estado == "procesando":
             return "en_proceso"
         return "no_encontrado"
 
 
 class DbFalsa:
+    def __init__(self, nombre="vector", linea_de_tiempo=None):
+        self.nombre = nombre
+        self.linea = linea_de_tiempo if linea_de_tiempo is not None else []
+
+    def rollback(self):
+        self.linea.append(f"rollback:{self.nombre}")
+
     def query(self, *a, **k):
         return self
 
@@ -133,19 +160,24 @@ class DbFalsa:
 class Base(unittest.TestCase):
     def setUp(self):
         self.estados = EstadosFalso()
-        self.db = DbFalsa()
+        self.linea = []  # linea de tiempo: rollbacks de las dos sesiones y llamadas al RPC
+        self.db = DbFalsa("vector", self.linea)
         self.db._estados = self.estados
+        self.db_usuarios = DbFalsa("usuarios", self.linea)
+        self.usuario_actual = USUARIO
         app = FastAPI()
         app.include_router(router_chatbot.router)
         app.dependency_overrides[get_db_vector] = lambda: self.db
-        app.dependency_overrides[get_current_user] = lambda: USUARIO
+        app.dependency_overrides[get_db] = lambda: self.db_usuarios
+        app.dependency_overrides[get_current_user] = lambda: self.usuario_actual
         self.cliente = TestClient(app)
         self.respuesta_asistente = {"status": "ok", "response": "Respuesta del asistente."}
         self.llamadas_rpc = []
 
         async def rpc_falso(payload):
+            self.linea.append("rpc")
             self.llamadas_rpc.append(payload)
-            if isinstance(self.respuesta_asistente, Exception):
+            if isinstance(self.respuesta_asistente, BaseException):
                 raise self.respuesta_asistente
             if callable(self.respuesta_asistente):
                 return self.respuesta_asistente()
@@ -349,6 +381,146 @@ class TestCancelarYEliminar(Base):
         self.estados.poner(_msg(5, "usuario", "respondido"))
         self.assertEqual(self.cliente.delete("/chatbot/mensajes/5").status_code, 409)
         self.assertEqual(self.cliente.delete("/chatbot/mensajes/999").status_code, 404)
+
+
+class TestAutorizacionConDosUsuarios(Base):
+    """Reintentar, cancelar y eliminar de un mensaje AJENO responden 404 y no revelan que existe."""
+
+    OTRO = SimpleNamespace(id=8)
+
+    def setUp(self):
+        super().setUp()
+        self.estados.poner(_msg(5, "usuario", "error", "pregunta del usuario 7", duenio=7))
+        self.usuario_actual = self.OTRO  # a partir de aqui las peticiones son del usuario 8
+
+    def comparar_con_inexistente(self, metodo, ruta_ajena, ruta_inexistente):
+        ajeno = getattr(self.cliente, metodo)(ruta_ajena)
+        inexistente = getattr(self.cliente, metodo)(ruta_inexistente)
+        self.assertEqual((ajeno.status_code, ajeno.content), (inexistente.status_code, inexistente.content))
+        self.assertEqual(ajeno.status_code, 404)
+        return ajeno
+
+    def test_reintentar_ajeno_es_404_identico_a_inexistente_y_no_llama_al_asistente(self):
+        self.comparar_con_inexistente("post", "/chatbot/mensajes/5/reintentar", "/chatbot/mensajes/999/reintentar")
+        self.assertEqual(self.llamadas_rpc, [])
+        self.assertEqual(self.estados.mensajes[5].estado, "error")
+
+    def test_cancelar_ajeno_es_404_identico_a_inexistente(self):
+        self.comparar_con_inexistente("post", "/chatbot/mensajes/5/cancelar", "/chatbot/mensajes/999/cancelar")
+        self.assertEqual(self.estados.mensajes[5].estado, "error")
+
+    def test_eliminar_ajeno_es_404_identico_a_inexistente_y_no_borra(self):
+        self.comparar_con_inexistente("delete", "/chatbot/mensajes/5", "/chatbot/mensajes/999")
+        self.assertIn(5, self.estados.mensajes)
+
+    def test_el_404_ajeno_no_filtra_contenido_ni_estado(self):
+        for metodo, ruta in (("post", "/chatbot/mensajes/5/reintentar"), ("post", "/chatbot/mensajes/5/cancelar"), ("delete", "/chatbot/mensajes/5")):
+            cuerpo = getattr(self.cliente, metodo)(ruta).text
+            self.assertNotIn("pregunta del usuario 7", cuerpo)
+            self.assertNotIn("error", cuerpo.lower().replace("no encontrado", ""))
+
+    def test_un_mensaje_ajeno_en_cualquier_estado_da_404_nunca_409(self):
+        for estado in ("respondido", "procesando", "pendiente", "cancelado"):
+            self.estados.mensajes.clear()
+            self.estados.poner(_msg(5, "usuario", estado, duenio=7))
+            for metodo, ruta in (("post", "/chatbot/mensajes/5/reintentar"), ("post", "/chatbot/mensajes/5/cancelar"), ("delete", "/chatbot/mensajes/5")):
+                self.assertEqual(getattr(self.cliente, metodo)(ruta).status_code, 404, f"{estado} {ruta}")
+
+    def test_el_dueño_si_puede(self):
+        self.usuario_actual = USUARIO
+        self.assertEqual(self.cliente.post("/chatbot/mensajes/5/cancelar").status_code, 200)
+
+
+class TestSesionesYFallos(Base):
+    def setUp(self):
+        super().setUp()
+        self.interruptor(True)
+
+    def test_las_dos_sesiones_se_liberan_ANTES_del_rpc(self):
+        self.enviar()
+        self.assertIn("rpc", self.linea)
+        antes_del_rpc = self.linea[: self.linea.index("rpc")]
+        self.assertIn("rollback:vector", antes_del_rpc)
+        self.assertIn("rollback:usuarios", antes_del_rpc)  # la de get_current_user tambien
+
+    def test_reintentar_tambien_libera_las_dos_sesiones_antes_del_rpc(self):
+        self.estados.poner(_msg(5, "usuario", "error"))
+        self.cliente.post("/chatbot/mensajes/5/reintentar")
+        antes_del_rpc = self.linea[: self.linea.index("rpc")]
+        self.assertIn("rollback:vector", antes_del_rpc)
+        self.assertIn("rollback:usuarios", antes_del_rpc)
+
+    def test_respuesta_sin_el_campo_response_no_deja_el_mensaje_procesando(self):
+        self.respuesta_asistente = {"status": "ok"}
+        r = self.enviar()
+        self.assertEqual(r.status_code, 502)
+        self.assertEqual(r.json()["mensaje_usuario"]["estado"], "error")
+
+    def test_respuesta_que_no_es_un_objeto_o_vacia_tampoco(self):
+        for rara in ("texto suelto", None, {"status": "ok", "response": None}, {"status": "ok", "response": "   "}):
+            self.estados.mensajes.clear()
+            self.respuesta_asistente = rara
+            r = self.enviar()
+            self.assertEqual(r.status_code, 502, str(rara))
+            self.assertEqual(r.json()["mensaje_usuario"]["estado"], "error", str(rara))
+            self.assertIsInstance(r.json()["detail"], str)
+
+    def test_fallo_de_la_bd_al_cerrar_deja_error_y_no_procesando(self):
+        original = self.estados.cerrar_respondido
+
+        def explota(*a, **k):
+            raise RuntimeError("BD caida")
+
+        self.estados.cerrar_respondido = explota
+        try:
+            r = self.enviar()
+        finally:
+            self.estados.cerrar_respondido = original
+        self.assertEqual((r.status_code, r.json()["mensaje_usuario"]["estado"]), (502, "error"))
+
+    def test_si_se_cancela_la_peticion_el_mensaje_no_queda_procesando(self):
+        mensaje = self.estados.poner(_msg(5, "usuario", "procesando", intentos=1))
+        self.respuesta_asistente = asyncio.CancelledError()
+        with self.assertRaises(asyncio.CancelledError):
+            asyncio.run(router_chatbot._procesar(self.db, self.db_usuarios, CONVERSACION, mensaje, USUARIO))
+        self.assertEqual(self.estados.mensajes[5].estado, "error")
+
+    def test_el_detalle_largo_del_worker_se_acota_en_el_servicio(self):
+        self.assertEqual(estados_real.MAX_DETALLE, 500)
+
+
+class TestCancelarYReintentarConRpcViejoVivo(Base):
+    """Hallazgo 1: cancelar y reintentar con el RPC anterior aun en vuelo."""
+
+    def setUp(self):
+        super().setUp()
+        self.interruptor(True)
+
+    def _mensaje_en_proceso(self):
+        return self.estados.poner(_msg(5, "usuario", "procesando", intentos=1))
+
+    def test_el_error_tardio_del_rpc_viejo_no_pisa_el_reintento_en_curso(self):
+        m = self._mensaje_en_proceso()
+        self.estados.cancelar(None, 5, 7)
+        self.estados.reintentar(None, 5, 7)  # intento 2 en vuelo
+        r = router_chatbot._fallo(self.db, 5, 1, 504, "tarde", "tarde")  # el RPC del intento 1 falla ahora
+        self.assertEqual((r.status_code, m.estado, m.intentos), (409, "procesando", 2))
+        self.assertIn("más reciente", r.body.decode())
+
+    def test_la_respuesta_tardia_del_rpc_viejo_se_descarta_y_el_reintento_cierra(self):
+        m = self._mensaje_en_proceso()
+        self.estados.cancelar(None, 5, 7)
+        self.estados.reintentar(None, 5, 7)
+        self.assertIsNone(self.estados.cerrar_respondido(None, 5, "respuesta vieja", 1))  # intento 1: descartada
+        cerrado = self.estados.cerrar_respondido(None, 5, "respuesta nueva", 2)
+        self.assertEqual((cerrado[0].estado, cerrado[1].contenido), ("respondido", "respuesta nueva"))
+        self.assertEqual([x.contenido for x in self.estados.mensajes.values() if x.rol == "asistente"], ["respuesta nueva"])
+
+    def test_el_409_dice_la_verdad_segun_el_estado_final(self):
+        casos = {"cancelado": "cancelado", "error": "marcado con error", "respondido": "ya fue respondido", "procesando": "más reciente"}
+        for estado, texto in casos.items():
+            self.assertIn(texto, router_chatbot._texto_intento_descartado(SimpleNamespace(estado=estado)))
+        self.assertIn("ya no existe", router_chatbot._texto_intento_descartado(None))
 
 
 class TestListar(Base):

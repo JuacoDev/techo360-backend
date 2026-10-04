@@ -1,8 +1,11 @@
+import asyncio
+
 from fastapi import APIRouter, Depends, HTTPException, Response
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 from core.config import settings
+from db.session import get_db
 from db.session_vector import get_db_vector
 from models.conversacion import Conversacion
 from models.mapcalor_user import MapCalorUser
@@ -182,6 +185,9 @@ async def enviar_mensaje(
     conversacion_id: int,
     datos: EnviarMensajeRequest,
     db: Session = Depends(get_db_vector),
+    # Misma sesion que usa get_current_user (FastAPI cachea la dependencia por peticion):
+    # se libera antes del RPC (ver _procesar).
+    db_usuarios: Session = Depends(get_db),
     current_user: MapCalorUser = Depends(get_current_user),
 ):
     conversacion = (
@@ -197,7 +203,7 @@ async def enviar_mensaje(
     # un mensaje sin resolver no admite otro (409). Apagado (por defecto) = el
     # comportamiento de siempre, abajo, sin cambios.
     if settings.chatbot_bloqueo_pendientes:
-        return await _enviar_con_estados(db, conversacion, datos.contenido, current_user)
+        return await _enviar_con_estados(db, db_usuarios, conversacion, datos.contenido, current_user)
 
     mensaje_usuario = chatbot_service.agregar_mensaje(db, conversacion_id, "usuario", datos.contenido)
 
@@ -242,56 +248,106 @@ def _respuesta_error(status: int, detail: str, mensaje: Mensaje | None, clave: s
     return JSONResponse(status_code=status, content={"detail": detail, clave: _json_mensaje(mensaje)})
 
 
-def _fallo(db: Session, mensaje_id: int, status: int, detail: str, detalle_guardado: str) -> JSONResponse:
-    mensaje = chatbot_estados.marcar_error(db, mensaje_id, detalle_guardado)
-    if mensaje is None:  # ya no estaba pendiente/procesando: cancelado o barrido mientras se esperaba
-        actual = db.get(Mensaje, mensaje_id)
-        db.refresh(actual) if actual is not None else None
-        if actual is not None and actual.estado == chatbot_estados.CANCELADO:
-            return _respuesta_error(409, "El mensaje fue cancelado.", actual)
-        return _respuesta_error(status, detail, actual)
+def _texto_intento_descartado(actual: Mensaje | None) -> str:
+    """409 cuando el resultado de un RPC ya no corresponde al estado del mensaje."""
+    estado = actual.estado if actual is not None else None
+    if estado == chatbot_estados.CANCELADO:
+        return "El mensaje fue cancelado; se descartó la respuesta."
+    if estado == chatbot_estados.PROCESANDO:
+        return "Hay un intento más reciente en curso; se ignoró el resultado de este."
+    if estado == chatbot_estados.RESPONDIDO:
+        return "El mensaje ya fue respondido por otro intento."
+    if estado == chatbot_estados.ERROR:
+        return "El mensaje ya estaba marcado con error; se descartó el resultado."
+    return "El mensaje ya no existe; se descartó el resultado."
+
+
+def _descartado(db: Session, mensaje_id: int) -> JSONResponse:
+    actual = db.get(Mensaje, mensaje_id)
+    if actual is not None:
+        db.refresh(actual)
+    return _respuesta_error(409, _texto_intento_descartado(actual), actual)
+
+
+def _fallo(db: Session, mensaje_id: int, intento: int, status: int, detail: str, detalle_guardado: str) -> JSONResponse:
+    """El asistente fallo: el mensaje pasa a 'error' SOLO si este intento sigue siendo el
+    vigente (no pisa un 'cancelado' ni a un reintento posterior)."""
+    mensaje = chatbot_estados.marcar_error(db, mensaje_id, detalle_guardado, intento)
+    if mensaje is None:
+        return _descartado(db, mensaje_id)
     return _respuesta_error(status, detail, mensaje)
 
 
-async def _procesar(db: Session, conversacion: Conversacion, mensaje_usuario: Mensaje, current_user: MapCalorUser):
+async def _procesar(
+    db: Session,
+    db_usuarios: Session,
+    conversacion: Conversacion,
+    mensaje_usuario: Mensaje,
+    current_user: MapCalorUser,
+):
     """El mensaje ya esta 'procesando': pide la respuesta al asistente y cierra el
     intercambio. Comun a enviar y reintentar. Mismos codigos de error de siempre
     (504 timeout, 503 asistente no disponible, 502 respuesta invalida), pero ahora
     el mensaje del usuario queda en 'error' y viaja en el cuerpo."""
+    # Todo lo que hace falta DESPUES del RPC se lee ahora, como valores simples, y se
+    # libera la conexion de AMBAS sesiones (la de postgres-vector y la de postgres-users,
+    # que get_current_user deja abierta): el RPC dura hasta 200 s y no debe retener
+    # conexiones del pool (5+10) todo ese tiempo. Despues del rollback los objetos ORM
+    # quedan expirados: de aqui en adelante solo se usan `mensaje_id` e `intento`.
+    mensaje_id = mensaje_usuario.id
+    intento = mensaje_usuario.intentos
+    payload = {
+        "mensaje": mensaje_usuario.contenido,
+        "usuario_id": current_user.id,
+        "consentimiento_entrenamiento": conversacion.consentimiento_entrenamiento,
+        "conversacion_id": conversacion.id,
+    }
+    db.rollback()
+    db_usuarios.rollback()
+
     try:
-        respuesta = await solicitar_chatbot(
-            {
-                "mensaje": mensaje_usuario.contenido,
-                "usuario_id": current_user.id,
-                "consentimiento_entrenamiento": conversacion.consentimiento_entrenamiento,
-                "conversacion_id": conversacion.id,
-            }
-        )
+        respuesta = await solicitar_chatbot(payload)
     except ChatbotTimeoutError as error:
-        return _fallo(db, mensaje_usuario.id, 504, str(error), chatbot_estados.DETALLE_TIMEOUT)
+        return _fallo(db, mensaje_id, intento, 504, str(error), chatbot_estados.DETALLE_TIMEOUT)
+    except asyncio.CancelledError:
+        # El servidor se esta deteniendo con el RPC en vuelo: que no quede 'procesando'.
+        chatbot_estados.marcar_error(db, mensaje_id, "El servidor se detuvo mientras se procesaba.", intento)
+        raise
     except Exception:
         return _fallo(
-            db, mensaje_usuario.id, 503,
+            db, mensaje_id, intento, 503,
             "No se pudo contactar al asistente. Intenta de nuevo en unos segundos.",
             "No se pudo contactar al asistente.",
         )
 
-    if respuesta.get("status") != "ok":
-        detail = respuesta.get("detail") or "El asistente no pudo generar una respuesta."
-        status = 503 if respuesta.get("tipo") == "ollama_no_disponible" else 502
-        return _fallo(db, mensaje_usuario.id, status, detail, detail)
-
-    cerrado = chatbot_estados.cerrar_respondido(db, mensaje_usuario.id, respuesta["response"])
+    try:
+        if not isinstance(respuesta, dict):
+            raise ValueError("respuesta del asistente no es un objeto")
+        if respuesta.get("status") != "ok":
+            detail = respuesta.get("detail") or "El asistente no pudo generar una respuesta."
+            status = 503 if respuesta.get("tipo") == "ollama_no_disponible" else 502
+            return _fallo(db, mensaje_id, intento, status, detail, detail)
+        texto = respuesta["response"]
+        if not isinstance(texto, str) or not texto.strip():
+            raise ValueError("respuesta del asistente vacia")
+        cerrado = chatbot_estados.cerrar_respondido(db, mensaje_id, texto, intento)
+    except Exception:
+        # Respuesta mal formada o fallo de la BD al cerrar: el mensaje NO puede quedar
+        # 'procesando' (bloquearia la conversacion hasta el barrido de 4 min).
+        db.rollback()
+        return _fallo(
+            db, mensaje_id, intento, 502,
+            "El asistente devolvió una respuesta inválida. Intenta de nuevo.",
+            "Respuesta inválida del asistente.",
+        )
     if cerrado is None:
-        # Cancelado (o barrido) mientras el asistente pensaba: la respuesta se descarta.
-        actual = db.get(Mensaje, mensaje_usuario.id)
-        if actual is not None:
-            db.refresh(actual)
-        return _respuesta_error(409, "El mensaje ya no estaba en proceso (fue cancelado); se descartó la respuesta.", actual)
+        return _descartado(db, mensaje_id)  # cancelado, barrido o intento posterior: la respuesta se descarta
     return IntercambioResponse(mensaje_usuario=cerrado[0], mensaje_asistente=cerrado[1])
 
 
-async def _enviar_con_estados(db: Session, conversacion: Conversacion, contenido: str, current_user: MapCalorUser):
+async def _enviar_con_estados(
+    db: Session, db_usuarios: Session, conversacion: Conversacion, contenido: str, current_user: MapCalorUser
+):
     chatbot_estados.barrer_colgados(db)
     try:
         mensaje = chatbot_estados.crear_pendiente(db, conversacion.id, contenido)
@@ -302,8 +358,10 @@ async def _enviar_con_estados(db: Session, conversacion: Conversacion, contenido
             bloqueo.mensaje_pendiente,
             clave="mensaje_pendiente",
         )
-    mensaje = chatbot_estados.marcar_procesando(db, mensaje.id) or mensaje
-    return await _procesar(db, conversacion, mensaje, current_user)
+    procesando = chatbot_estados.marcar_procesando(db, mensaje.id)
+    if procesando is None:  # cancelado o eliminado entre guardarlo y enviarlo: no se llama al asistente
+        return _descartado(db, mensaje.id)
+    return await _procesar(db, db_usuarios, conversacion, procesando, current_user)
 
 
 @router.post(
@@ -328,6 +386,7 @@ async def _enviar_con_estados(db: Session, conversacion: Conversacion, contenido
 async def reintentar_mensaje(
     mensaje_id: int,
     db: Session = Depends(get_db_vector),
+    db_usuarios: Session = Depends(get_db),
     current_user: MapCalorUser = Depends(get_current_user),
 ):
     chatbot_estados.barrer_colgados(db)
@@ -340,7 +399,7 @@ async def reintentar_mensaje(
             409, f"El mensaje está en estado '{existente.estado}': solo se puede reintentar uno con error o cancelado.", existente
         )
     conversacion = db.get(Conversacion, mensaje.conversacion_id)
-    return await _procesar(db, conversacion, mensaje, current_user)
+    return await _procesar(db, db_usuarios, conversacion, mensaje, current_user)
 
 
 @router.post(
