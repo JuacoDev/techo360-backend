@@ -193,6 +193,26 @@ class TestHitMiss(Base):
         self.assertEqual(serializar(CONTENIDO), JSONResponse(CONTENIDO).body)
 
 
+class TestSerializarNaN(unittest.TestCase):
+    """Hallazgo 7: antes (Pydantic) NaN/Infinity salian como null; no debe dar 500."""
+
+    def test_nan_e_infinito_salen_como_null(self):
+        cuerpo = {"valor": float("nan"), "lista": [1.5, float("inf"), float("-inf")], "anidado": {"x": float("nan")}}
+        self.assertEqual(
+            json.loads(serializar(cuerpo)),
+            {"valor": None, "lista": [1.5, None, None], "anidado": {"x": None}},
+        )
+
+    def test_sin_nan_el_resultado_es_el_de_siempre(self):
+        self.assertEqual(serializar(CONTENIDO), JSONResponse(CONTENIDO).body)
+
+    def test_el_endpoint_con_nan_en_los_datos_responde_200_con_null(self):
+        cache = ZonasCache(RedisFalso())
+        r = resolver(cache, "municipio", 2024, lambda: {"features": [{"properties": {"score_privacion": float("nan")}}]})
+        self.assertEqual(r.status, 200)
+        self.assertIsNone(json.loads(gzip.decompress(r.cuerpo) if "Content-Encoding" in r.encabezados else r.cuerpo)["features"][0]["properties"]["score_privacion"])
+
+
 class TestETag(Base):
     def test_if_none_match_devuelve_304_sin_cuerpo(self):
         etag = resolver(self.cache, "municipio", 2024, self.construir).encabezados["ETag"]

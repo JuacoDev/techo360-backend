@@ -72,13 +72,31 @@ MISS = "MISS"
 BYPASS = "BYPASS"
 
 
+def _sin_nan(valor):
+    """NaN / Infinity -> None, de forma recursiva."""
+    if isinstance(valor, float) and (valor != valor or valor in (float("inf"), float("-inf"))):
+        return None
+    if isinstance(valor, dict):
+        return {k: _sin_nan(v) for k, v in valor.items()}
+    if isinstance(valor, (list, tuple)):
+        return [_sin_nan(v) for v in valor]
+    return valor
+
+
 def serializar(contenido: dict) -> bytes:
     """Mismo JSON que produce la respuesta normal de FastAPI (compacto, sin
     escapar tildes), pero sin pasar por la validacion Pydantic de
-    ~214.000 coordenadas, que no aporta nada: el dict lo construimos nosotros."""
-    return json.dumps(
-        contenido, ensure_ascii=False, allow_nan=False, separators=(",", ":")
-    ).encode("utf-8")
+    ~214.000 coordenadas, que no aporta nada: el dict lo construimos nosotros.
+
+    Pydantic serializaba NaN/Infinity como null; json.dumps(allow_nan=False)
+    lanza ValueError. mapcalordb.valuevar es numeric (admite NaN): hoy hay 0
+    filas con NaN, pero si alguna entrara, la respuesta daria 500. Se
+    reintenta con NaN/Infinity -> null, igual que antes (el camino normal no
+    paga nada)."""
+    try:
+        return json.dumps(contenido, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")
+    except ValueError:
+        return json.dumps(_sin_nan(contenido), ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")
 
 
 def _etag_de(cuerpo: bytes) -> str:
