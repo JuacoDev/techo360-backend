@@ -137,6 +137,53 @@ class TestHitMiss(Base):
         r = resolver(self.cache, "municipio", 2024, self.construir, accept_encoding="gzip;q=0, identity")
         self.assertNotIn("Content-Encoding", r.encabezados)
 
+    def test_x_cache_miss_luego_hit(self):
+        r1 = resolver(self.cache, "municipio", 2024, self.construir)
+        r2 = resolver(self.cache, "municipio", 2024, self.construir)
+        self.assertEqual(r1.encabezados["X-Cache"], "MISS")
+        self.assertEqual(r2.encabezados["X-Cache"], "HIT")
+
+    def test_x_cache_hit_tambien_con_gzip_y_sin_gzip(self):
+        resolver(self.cache, "municipio", 2024, self.construir)
+        for ae in ("gzip", "identity"):
+            r = resolver(self.cache, "municipio", 2024, self.construir, accept_encoding=ae)
+            self.assertEqual(r.encabezados["X-Cache"], "HIT")
+
+    def test_x_cache_304_es_hit(self):
+        etag = resolver(self.cache, "municipio", 2024, self.construir).encabezados["ETag"]
+        r = resolver(self.cache, "municipio", 2024, self.construir, if_none_match=etag)
+        self.assertEqual((r.status, r.encabezados["X-Cache"]), (304, "HIT"))
+
+    def test_x_cache_bypass_si_el_anio_no_es_cacheable(self):
+        for anio in (2025, 1999):
+            r = resolver(self.cache, "municipio", anio, self.construir)
+            self.assertEqual(r.encabezados["X-Cache"], "BYPASS")
+
+    def test_x_cache_bypass_si_redis_esta_caido(self):
+        self.redis.caido = True
+        r = resolver(self.cache, "municipio", 2024, self.construir)
+        self.assertEqual(r.encabezados["X-Cache"], "BYPASS")
+
+    def test_x_cache_hit_para_quien_espera_el_candado(self):
+        self.redis.datos["zonas:v1:lock:municipio:2024"] = b"1"
+
+        def otro_proceso():
+            time.sleep(0.2)
+            self.cache.guardar("municipio", 2024, serializar(CONTENIDO))
+
+        hilo = threading.Thread(target=otro_proceso)
+        with patch.object(modulo, "INTERVALO_ESPERA_SEGUNDOS", 0.05):
+            hilo.start()
+            r = resolver(self.cache, "municipio", 2024, self.construir)
+            hilo.join()
+        self.assertEqual(r.encabezados["X-Cache"], "HIT")
+
+    def test_x_cache_miss_si_el_candado_no_se_libero_y_se_calculo_y_guardo(self):
+        self.redis.datos["zonas:v1:lock:municipio:2024"] = b"1"
+        with patch.object(modulo, "ESPERA_MAXIMA_SEGUNDOS", 0.1), patch.object(modulo, "INTERVALO_ESPERA_SEGUNDOS", 0.05):
+            r = resolver(self.cache, "municipio", 2024, self.construir)
+        self.assertEqual(r.encabezados["X-Cache"], "MISS")
+
     def test_encabezados_de_cache(self):
         r = resolver(self.cache, "municipio", 2024, self.construir)
         self.assertEqual(r.encabezados["Cache-Control"], "private, no-cache")
@@ -323,6 +370,17 @@ class TestEndpoint(Base):
         r2 = self.cliente.get("/api/zonas?nivel=municipio&anio=2024", headers={"If-None-Match": etag})
         self.assertEqual((r2.status_code, r2.content), (304, b""))
         self.assertEqual(self.llamadas, 1)
+
+    def test_cabecera_x_cache_en_el_endpoint(self):
+        url = "/api/zonas?nivel=municipio&anio=2024"
+        self.assertEqual(self.cliente.get(url).headers["x-cache"], "MISS")
+        self.assertEqual(self.cliente.get(url).headers["x-cache"], "HIT")
+        self.assertEqual(self.cliente.get(url, headers={"Accept-Encoding": "gzip"}).headers["x-cache"], "HIT")
+        etag = self.cliente.get(url).headers["etag"]
+        self.assertEqual(self.cliente.get(url, headers={"If-None-Match": etag}).headers["x-cache"], "HIT")
+        self.assertEqual(self.cliente.get("/api/zonas?nivel=municipio&anio=2025").headers["x-cache"], "BYPASS")
+        self.redis.caido = True
+        self.assertEqual(self.cliente.get(url).headers["x-cache"], "BYPASS")
 
     def test_sin_anio_usa_2024_y_comparte_entrada(self):
         self.cliente.get("/api/zonas?nivel=departamento")

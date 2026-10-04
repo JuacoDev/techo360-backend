@@ -54,6 +54,16 @@ NIVEL_COMPRESION = 6
 
 CACHE_CONTROL = "private, no-cache"
 
+# Cabecera X-Cache, para saber de un vistazo (curl / pestaña Network) como se
+# sirvio una respuesta:
+#   HIT    -> servida desde Redis (tambien los 304, y quien esperaba el
+#             candado y encontro el cache ya lleno)
+#   MISS   -> calculada en esta peticion Y guardada en Redis
+#   BYPASS -> sin cache: año/nivel no cacheable, o Redis caido
+HIT = "HIT"
+MISS = "MISS"
+BYPASS = "BYPASS"
+
 
 def serializar(contenido: dict) -> bytes:
     """Mismo JSON que produce la respuesta normal de FastAPI (compacto, sin
@@ -163,15 +173,15 @@ def _coincide(if_none_match: str | None, etag: str) -> bool:
     return False
 
 
-def _encabezados(etag: str | None = None) -> dict:
-    encabezados = {"Cache-Control": CACHE_CONTROL, "Vary": "Accept-Encoding"}
+def _encabezados(estado: str, etag: str | None = None) -> dict:
+    encabezados = {"Cache-Control": CACHE_CONTROL, "Vary": "Accept-Encoding", "X-Cache": estado}
     if etag is not None:
         encabezados["ETag"] = f'"{etag}"'
     return encabezados
 
 
-def _respuesta_desde_entrada(etag: str, comprimido: bytes, acepta_gzip: bool) -> RespuestaZonas:
-    encabezados = _encabezados(etag)
+def _respuesta_desde_entrada(estado: str, etag: str, comprimido: bytes, acepta_gzip: bool) -> RespuestaZonas:
+    encabezados = _encabezados(estado, etag)
     if acepta_gzip:
         encabezados["Content-Encoding"] = "gzip"
         return RespuestaZonas(200, comprimido, encabezados)
@@ -179,17 +189,18 @@ def _respuesta_desde_entrada(etag: str, comprimido: bytes, acepta_gzip: bool) ->
 
 
 def _respuesta_sin_cache(cuerpo: bytes) -> RespuestaZonas:
-    return RespuestaZonas(200, cuerpo, _encabezados())
+    return RespuestaZonas(200, cuerpo, _encabezados(BYPASS))
 
 
 def _calcular_con_candado(cache: ZonasCache, nivel: str, anio: int, construir: Callable[[], dict]):
-    """Devuelve (etag, comprimido) -- o None si hubo que servir sin cache."""
+    """Devuelve ((etag, comprimido), estado): HIT si el cache ya estaba lleno
+    (lo lleno otro proceso), MISS si lo lleno esta peticion."""
     if cache.adquirir_lock(nivel, anio):
         try:
             existente = cache.obtener(nivel, anio)  # otro proceso pudo llenarlo justo antes
             if existente is not None:
-                return existente
-            return cache.guardar(nivel, anio, serializar(construir()))
+                return existente, HIT
+            return cache.guardar(nivel, anio, serializar(construir())), MISS
         finally:
             try:
                 cache.liberar_lock(nivel, anio)
@@ -202,9 +213,9 @@ def _calcular_con_candado(cache: ZonasCache, nivel: str, anio: int, construir: C
         time.sleep(INTERVALO_ESPERA_SEGUNDOS)
         existente = cache.obtener(nivel, anio)
         if existente is not None:
-            return existente
+            return existente, HIT
     logger.warning("zonas %s/%s: el candado no libero a tiempo; se calcula sin esperar.", nivel, anio)
-    return cache.guardar(nivel, anio, serializar(construir()))
+    return cache.guardar(nivel, anio, serializar(construir())), MISS
 
 
 def resolver(
@@ -224,19 +235,20 @@ def resolver(
         if if_none_match:
             etag_actual = cache.obtener_etag(nivel, anio)
             if etag_actual is not None and _coincide(if_none_match, etag_actual):
-                return RespuestaZonas(304, b"", _encabezados(etag_actual))
+                return RespuestaZonas(304, b"", _encabezados(HIT, etag_actual))
 
         entrada = cache.obtener(nivel, anio)
+        estado = HIT
         if entrada is None:
-            entrada = _calcular_con_candado(cache, nivel, anio, construir)
+            entrada, estado = _calcular_con_candado(cache, nivel, anio, construir)
     except redis.RedisError as error:
         logger.warning("Redis no disponible para zonas %s/%s (%s); se sirve sin cache.", nivel, anio, error)
         return _respuesta_sin_cache(serializar(construir()))
 
     etag, comprimido = entrada
     if _coincide(if_none_match, etag):
-        return RespuestaZonas(304, b"", _encabezados(etag))
-    return _respuesta_desde_entrada(etag, comprimido, _acepta_gzip(accept_encoding))
+        return RespuestaZonas(304, b"", _encabezados(estado, etag))
+    return _respuesta_desde_entrada(estado, etag, comprimido, _acepta_gzip(accept_encoding))
 
 
 def invalidar_cache_zonas() -> int:
