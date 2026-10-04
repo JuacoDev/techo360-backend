@@ -18,7 +18,7 @@ from db.session import get_db
 from models.mapcalor_user import MapCalorUser
 from services.auth_service import autenticar_usuario, hashear_password
 from services.otp_service import OTPInvalidError, OTPTooManyAttemptsError, otp_service
-from core.config import settings
+from core.config import ACCESS_TOKEN_EXPIRE_HOURS, settings
 
 
 router = APIRouter(
@@ -40,7 +40,7 @@ def crear_access_token(user_id: int, correo: str, name: str) -> str:
         "correo": correo,
         "name": name,
         "iat": ahora,
-        "exp": ahora + timedelta(hours=1),
+        "exp": ahora + timedelta(hours=ACCESS_TOKEN_EXPIRE_HOURS),
     }
     return jwt.encode(payload, settings.jwt_secret_key, algorithm="HS256")
 

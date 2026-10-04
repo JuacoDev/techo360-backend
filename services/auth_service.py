@@ -5,7 +5,7 @@ import bcrypt
 import jwt
 from sqlalchemy.orm import Session
 
-from core.config import settings
+from core.config import ACCESS_TOKEN_EXPIRE_HOURS, settings
 from models.mapcalor_user import MapCalorUser
 
 # bcrypt trunca (o en versiones nuevas, lanza error) mas alla de 72 bytes --
@@ -38,7 +38,7 @@ def crear_access_token(user_id: int, correo: str, name: str) -> str:
         "correo": correo,
         "name": name,
         "iat": ahora,
-        "exp": ahora + timedelta(hours=1),
+        "exp": ahora + timedelta(hours=ACCESS_TOKEN_EXPIRE_HOURS),
     }
 
     return jwt.encode(
