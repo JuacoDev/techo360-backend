@@ -46,6 +46,16 @@ ANIO_DEFAULT = 2024
 # reintroduzca en una carga futura, no limpia lo que ya esta guardado).
 CODIGO_AGREGADO_NACIONAL_TERRIDATA = "01001"
 
+# "Area En Litigio Cauca - Huila": existe como poligono en zonas_municipio
+# (codigo '00000') y en zonas_departamento (codigo '00'), pero no es un
+# municipio ni un departamento reales -- DANE no le asigna codigo propio
+# y mapcalordb no tiene ninguna fila para ella (verificado en produccion,
+# 4-oct-2026). Se excluye de la respuesta para que no aparezca en el mapa
+# ni en los selectores. Es un filtro de lectura: NO se borra ninguna fila
+# de zonas_municipio / zonas_departamento (el ETL de zonas la repone).
+CODIGOS_MUNICIPIO_EXCLUIDOS = ["00000"]
+CODIGOS_DEPARTAMENTO_EXCLUIDOS = ["00"]
+
 # Las 3 variables que entran al score compuesto de privacion (expuesto
 # como score_privacion -- "Score_privación" en el documento de
 # metodologia, sin tilde/mayuscula aqui por consistencia con el resto
@@ -186,8 +196,10 @@ def obtener_zonas(
                 nombre,
                 ST_AsGeoJSON(geom) AS geometry
             FROM zonas_departamento
+            WHERE codigo_departamento != ALL(:excluidos)
             ORDER BY nombre
         """)
+        parametros_zonas = {"excluidos": CODIGOS_DEPARTAMENTO_EXCLUIDOS}
 
     else:
         query = text("""
@@ -197,11 +209,13 @@ def obtener_zonas(
                 nombre,
                 ST_AsGeoJSON(geom) AS geometry
             FROM zonas_municipio
+            WHERE codigo_municipio != ALL(:excluidos)
             ORDER BY nombre
         """)
+        parametros_zonas = {"excluidos": CODIGOS_MUNICIPIO_EXCLUIDOS}
 
     try:
-        resultados = db.execute(query).mappings().all()
+        resultados = db.execute(query, parametros_zonas).mappings().all()
 
         # --- Indicadores por municipio, UNA sola query para las 7
         # variables del año pedido (evita N+1 contra ~1,105 zonas x 7
@@ -286,10 +300,15 @@ def obtener_zonas(
                 JOIN zonas_municipio zm ON m.codigodivipola = zm.codigo_municipio
                 WHERE m.namevar = ANY(:variables)
                   AND zm.codigo_departamento IS NOT NULL
+                  AND zm.codigo_municipio != ALL(:municipios_excluidos)
                 ORDER BY zm.codigo_departamento, m.namevar, m.yearm DESC
             """)
             filas_indicadores_depto = db.execute(
-                query_indicadores_depto, {"variables": VARIABLES_INDICADORES}
+                query_indicadores_depto,
+                {
+                    "variables": VARIABLES_INDICADORES,
+                    "municipios_excluidos": CODIGOS_MUNICIPIO_EXCLUIDOS,
+                },
             ).mappings().all()
 
             for fila in filas_indicadores_depto:
