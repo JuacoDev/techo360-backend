@@ -196,6 +196,14 @@ def obtener_zonas(
     # una Response directa, asi que no pasa por la validacion Pydantic de
     # response_model (que solo sirve aqui para documentar el esquema).
     # current_user solo exige sesion: el cuerpo NO depende del usuario.
+    # get_current_user comparte esta sesion de BD (FastAPI cachea la dependencia
+    # por peticion) y ya hizo una consulta: la sesion tiene una transaccion
+    # abierta y UNA CONEXION DEL POOL (5+10) retenida. Sin esto, esperar el
+    # candado (hasta 20 s) o un timeout de Redis (2 s) mantendria la conexion
+    # ocupada y bastarian ~16 peticiones simultaneas para agotar el pool de
+    # todo el backend. rollback() la libera; _construir_zonas la vuelve a
+    # tomar solo si de verdad hay que calcular.
+    db.rollback()
     respuesta = resolver(
         zonas_cache,
         nivel,

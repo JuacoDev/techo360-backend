@@ -52,6 +52,13 @@ ESPERA_MAXIMA_SEGUNDOS = 20
 INTERVALO_ESPERA_SEGUNDOS = 0.25
 NIVEL_COMPRESION = 6
 
+# Si Redis falla (caido o inalcanzable), cada peticion pagaria el timeout de
+# conexion antes de caer a calcular sin cache. Tras un fallo se deja de
+# intentar durante CIRCUITO_SEGUNDOS: las peticiones van directo a BYPASS.
+CIRCUITO_SEGUNDOS = 30
+TIMEOUT_CONEXION_SEGUNDOS = 1
+TIMEOUT_LECTURA_SEGUNDOS = 3
+
 CACHE_CONTROL = "private, no-cache"
 
 # Cabecera X-Cache, para saber de un vistazo (curl / pestaña Network) como se
@@ -81,6 +88,14 @@ def _etag_de(cuerpo: bytes) -> str:
 class ZonasCache:
     def __init__(self, cliente=None):
         self._cliente = cliente
+        self._sin_redis_hasta = 0.0
+
+    def redis_disponible(self) -> bool:
+        """False mientras el circuito este abierto (hubo un fallo reciente)."""
+        return time.monotonic() >= self._sin_redis_hasta
+
+    def marcar_caido(self) -> None:
+        self._sin_redis_hasta = time.monotonic() + CIRCUITO_SEGUNDOS
 
     @property
     def cliente(self):
@@ -88,8 +103,8 @@ class ZonasCache:
             self._cliente = redis.Redis.from_url(
                 settings.redis_url,
                 decode_responses=False,
-                socket_connect_timeout=2,
-                socket_timeout=5,
+                socket_connect_timeout=TIMEOUT_CONEXION_SEGUNDOS,
+                socket_timeout=TIMEOUT_LECTURA_SEGUNDOS,
             )
         return self._cliente
 
@@ -231,6 +246,9 @@ def resolver(
     if not cache.cacheable(nivel, anio):
         return _respuesta_sin_cache(serializar(construir()))
 
+    if not cache.redis_disponible():  # circuito abierto: no se toca Redis
+        return _respuesta_sin_cache(serializar(construir()))
+
     try:
         if if_none_match:
             etag_actual = cache.obtener_etag(nivel, anio)
@@ -243,6 +261,7 @@ def resolver(
             entrada, estado = _calcular_con_candado(cache, nivel, anio, construir)
     except redis.RedisError as error:
         logger.warning("Redis no disponible para zonas %s/%s (%s); se sirve sin cache.", nivel, anio, error)
+        cache.marcar_caido()
         return _respuesta_sin_cache(serializar(construir()))
 
     etag, comprimido = entrada

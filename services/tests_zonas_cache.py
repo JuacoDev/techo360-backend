@@ -332,6 +332,41 @@ class TestRedisCaido(Base):
         self.assertEqual(json.loads(r.cuerpo), CONTENIDO)
 
 
+class TestCircuitoRedis(Base):
+    """Hallazgo 2: con Redis inalcanzable no se paga el timeout en CADA peticion."""
+
+    def test_tras_un_fallo_las_siguientes_peticiones_no_tocan_redis(self):
+        self.redis.caido = True
+        resolver(self.cache, "municipio", 2024, self.construir)  # primer fallo: abre el circuito
+        llamadas = []
+        original = self.redis.mget
+        self.redis.mget = lambda *a, **k: (llamadas.append(1), original(*a, **k))[1]
+        self.redis.get = lambda *a, **k: llamadas.append(1)
+        for _ in range(5):
+            r = resolver(self.cache, "municipio", 2024, self.construir)
+            self.assertEqual(r.encabezados["X-Cache"], "BYPASS")
+        self.assertEqual(llamadas, [])  # ni una sola llamada a Redis
+        self.assertEqual(self.llamadas, 6)  # se calculo cada vez, como antes del cache
+
+    def test_el_circuito_se_cierra_pasado_el_tiempo_y_se_recupera(self):
+        self.redis.caido = True
+        resolver(self.cache, "municipio", 2024, self.construir)
+        self.redis.caido = False  # Redis vuelve
+        r = resolver(self.cache, "municipio", 2024, self.construir)
+        self.assertEqual(r.encabezados["X-Cache"], "BYPASS")  # aun abierto
+        inicio = time.monotonic()
+        with patch.object(modulo.time, "monotonic", lambda: inicio + modulo.CIRCUITO_SEGUNDOS + 1):
+            r = resolver(self.cache, "municipio", 2024, self.construir)
+            self.assertEqual(r.encabezados["X-Cache"], "MISS")
+            r = resolver(self.cache, "municipio", 2024, self.construir)
+            self.assertEqual(r.encabezados["X-Cache"], "HIT")
+
+    def test_timeouts_de_redis_acotados(self):
+        self.assertLessEqual(modulo.TIMEOUT_CONEXION_SEGUNDOS, 1)
+        self.assertLessEqual(modulo.TIMEOUT_LECTURA_SEGUNDOS, 3)
+        self.assertEqual(modulo.CIRCUITO_SEGUNDOS, 30)
+
+
 class TestNadaDelUsuario(unittest.TestCase):
     def test_construir_zonas_no_recibe_usuario(self):
         from routers import zonas
@@ -348,14 +383,21 @@ class TestEndpoint(Base):
         from routers import zonas
         from routers.auth import get_current_user
 
+        self.eventos = []
+        outer = self
+
+        class DbFalsa:
+            def rollback(self):
+                outer.eventos.append("rollback")
+
         app = FastAPI()
         app.include_router(zonas.router)
-        app.dependency_overrides[get_db] = lambda: None
+        app.dependency_overrides[get_db] = lambda: DbFalsa()
         app.dependency_overrides[get_current_user] = lambda: None
         self.cliente = TestClient(app)
         for p in (
             patch.object(zonas, "zonas_cache", self.cache),
-            patch.object(zonas, "_construir_zonas", lambda nivel, anio, db: self.construir()),
+            patch.object(zonas, "_construir_zonas", lambda nivel, anio, db: (self.eventos.append("construir"), self.construir())[1]),
         ):
             p.start()
             self.addCleanup(p.stop)
@@ -391,6 +433,12 @@ class TestEndpoint(Base):
         r = self.cliente.get("/api/zonas?nivel=municipio&anio=2024", headers={"Accept-Encoding": "gzip"})
         self.assertEqual(r.headers.get("content-encoding"), "gzip")
         self.assertEqual(r.json(), CONTENIDO)
+
+    def test_libera_la_conexion_de_bd_antes_de_calcular(self):
+        # Hallazgo 1 de la revision: la sesion (compartida con get_current_user)
+        # no debe retener una conexion del pool mientras se espera Redis/candado.
+        self.cliente.get("/api/zonas?nivel=municipio&anio=2024")
+        self.assertEqual(self.eventos[:2], ["rollback", "construir"])
 
     def test_nivel_invalido_sigue_dando_422(self):
         self.assertEqual(self.cliente.get("/api/zonas?nivel=region").status_code, 422)
