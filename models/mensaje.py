@@ -1,4 +1,4 @@
-from sqlalchemy import BigInteger, Boolean, Column, DateTime, ForeignKey, Text
+from sqlalchemy import BigInteger, Boolean, Column, DateTime, ForeignKey, Integer, Text
 from sqlalchemy.sql import func
 
 from db.session_vector import BaseVector
@@ -29,3 +29,6 @@ class Mensaje(BaseVector):
     estado = Column(Text, nullable=False, server_default="respondido")
     error_detalle = Column(Text, nullable=True)
     actualizado_en = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    # Cuantas veces paso a 'procesando'. Identifica QUE intento espera al asistente: un RPC
+    # cancelado que sigue vivo no puede cerrar ni marcar error un intento posterior.
+    intentos = Column(Integer, nullable=False, server_default="0")

@@ -38,6 +38,13 @@ RESPONDIDO = "respondido"
 ESTADOS = (PENDIENTE, PROCESANDO, ERROR, CANCELADO, RESPONDIDO)
 SIN_RESOLVER = (PENDIENTE, PROCESANDO, ERROR, CANCELADO)
 
+# Nombre del indice unico parcial de la migracion 0002: es el UNICO IntegrityError que
+# significa "la conversacion ya tiene un mensaje sin resolver".
+INDICE_UNICO_SIN_RESOLVER = "uq_mensajes_un_sin_resolver_por_conversacion"
+
+# error_detalle viene del detalle que devuelve el worker: se acota (la BD admite 1000).
+MAX_DETALLE = 500
+
 # El RPC al asistente tiene tope de 200 s (services/chatbot_rpc_client.py): un
 # 'procesando'/'pendiente' de mas de 4 min ya no tiene a nadie esperando.
 MINUTOS_COLGADO = 4
@@ -87,16 +94,33 @@ def crear_pendiente(db: Session, conversacion_id: int, contenido: str) -> Mensaj
         db.commit()
     except IntegrityError as error:
         db.rollback()
+        nombre = getattr(getattr(error.orig, "diag", None), "constraint_name", None)
+        if nombre != INDICE_UNICO_SIN_RESOLVER:
+            raise  # otro error de integridad (p. ej. la conversacion ya no existe): NO es un 409
         raise ConversacionBloqueada(mensaje_sin_resolver(db, conversacion_id)) from error
     db.refresh(mensaje)
     return mensaje
 
 
-def _cambiar(db: Session, mensaje_id: int, desde: tuple, hacia: str, usuario_id: int | None = None, detalle: str | None = None) -> Mensaje | None:
-    """UPDATE condicional: solo si el estado actual esta en `desde`. Devuelve el
-    mensaje actualizado, o None si ya no estaba en ninguno de esos estados."""
-    valores = {"estado": hacia, "actualizado_en": func.now(), "error_detalle": detalle}
+def _cambiar(
+    db: Session,
+    mensaje_id: int,
+    desde: tuple,
+    hacia: str,
+    usuario_id: int | None = None,
+    detalle: str | None = None,
+    nuevo_intento: bool = False,
+    intento: int | None = None,
+) -> Mensaje | None:
+    """UPDATE condicional: solo si el estado actual esta en `desde` (y, si se da,
+    `intento` es el intento vigente). Devuelve el mensaje actualizado, o None si ya no
+    estaba en ninguno de esos estados / ya hay otro intento."""
+    valores = {"estado": hacia, "actualizado_en": func.now(), "error_detalle": detalle[:MAX_DETALLE] if detalle else detalle}
+    if nuevo_intento:
+        valores["intentos"] = Mensaje.intentos + 1  # el intento nuevo invalida a los RPC anteriores
     condiciones = [Mensaje.id == mensaje_id, Mensaje.rol == "usuario", Mensaje.estado.in_(desde)]
+    if intento is not None:
+        condiciones.append(Mensaje.intentos == intento)
     if usuario_id is not None:
         condiciones.append(_de_usuario(usuario_id))
     mensaje = db.scalars(update(Mensaje).where(*condiciones).values(**valores).returning(Mensaje)).first()
@@ -107,12 +131,13 @@ def _cambiar(db: Session, mensaje_id: int, desde: tuple, hacia: str, usuario_id:
 
 
 def marcar_procesando(db: Session, mensaje_id: int) -> Mensaje | None:
-    return _cambiar(db, mensaje_id, (PENDIENTE,), PROCESANDO)
+    """pendiente -> procesando (primer intento: intentos pasa a 1)."""
+    return _cambiar(db, mensaje_id, (PENDIENTE,), PROCESANDO, nuevo_intento=True)
 
 
 def reintentar(db: Session, mensaje_id: int, usuario_id: int) -> Mensaje | None:
     """error|cancelado -> procesando (atomico: dos reintentos a la vez, gana uno)."""
-    return _cambiar(db, mensaje_id, (ERROR, CANCELADO), PROCESANDO, usuario_id=usuario_id)
+    return _cambiar(db, mensaje_id, (ERROR, CANCELADO), PROCESANDO, usuario_id=usuario_id, nuevo_intento=True)
 
 
 def cancelar(db: Session, mensaje_id: int, usuario_id: int) -> Mensaje | None:
@@ -122,20 +147,25 @@ def cancelar(db: Session, mensaje_id: int, usuario_id: int) -> Mensaje | None:
     return _cambiar(db, mensaje_id, (PENDIENTE, PROCESANDO, ERROR), CANCELADO, usuario_id=usuario_id)
 
 
-def marcar_error(db: Session, mensaje_id: int, detalle: str) -> Mensaje | None:
-    """pendiente|procesando -> error. No pisa un 'cancelado' (el usuario ya decidio)."""
-    return _cambiar(db, mensaje_id, (PENDIENTE, PROCESANDO), ERROR, detalle=detalle)
+def marcar_error(db: Session, mensaje_id: int, detalle: str, intento: int | None = None) -> Mensaje | None:
+    """pendiente|procesando -> error. No pisa un 'cancelado' (el usuario ya decidio) ni
+    a un intento posterior: con `intento`, solo actua si ese sigue siendo el vigente."""
+    return _cambiar(db, mensaje_id, (PENDIENTE, PROCESANDO), ERROR, detalle=detalle, intento=intento)
 
 
-def cerrar_respondido(db: Session, mensaje_id: int, contenido_respuesta: str) -> tuple[Mensaje, Mensaje] | None:
+def cerrar_respondido(db: Session, mensaje_id: int, contenido_respuesta: str, intento: int | None = None) -> tuple[Mensaje, Mensaje] | None:
     """procesando -> respondido + guarda la respuesta del asistente, en UNA
     transaccion. Devuelve (mensaje_usuario, mensaje_asistente), o None si el
     mensaje ya no estaba 'procesando' (cancelado/eliminado/barrido mientras el
-    asistente pensaba): en ese caso NO se guarda la respuesta."""
+    asistente pensaba) o si ya hay un intento posterior (`intento` no es el vigente):
+    en ese caso NO se guarda la respuesta."""
+    condiciones = [Mensaje.id == mensaje_id, Mensaje.rol == "usuario", Mensaje.estado == PROCESANDO]
+    if intento is not None:
+        condiciones.append(Mensaje.intentos == intento)
     try:
         usuario = db.scalars(
             update(Mensaje)
-            .where(Mensaje.id == mensaje_id, Mensaje.rol == "usuario", Mensaje.estado == PROCESANDO)
+            .where(*condiciones)
             .values(estado=RESPONDIDO, error_detalle=None, actualizado_en=func.now())
             .returning(Mensaje)
         ).first()
@@ -188,7 +218,13 @@ def barrer_colgados(db: Session, minutos: int = MINUTOS_COLGADO) -> int:
 
 def barrer_al_arrancar(db: Session) -> int:
     """Al arrancar el backend (un solo worker) ningun RPC sigue en vuelo: todo
-    'pendiente'/'procesando' quedo huerfano por el reinicio -> error."""
+    'pendiente'/'procesando' quedo huerfano por el reinicio -> error.
+
+    SUPUESTO: UN solo contenedor/worker del backend. `docker compose up -d` detiene el
+    contenedor viejo ANTES de crear el nuevo, asi que el barrido no se cruza con un RPC
+    en vuelo. Con 2+ replicas el arranque de una romperia el RPC en vuelo de la otra
+    (su respuesta valida se descartaria): habria que acotar por antiguedad
+    (actualizado_en < now() - 4 min) o quitar este barrido y dejar el perezoso."""
     filas = db.execute(
         update(Mensaje)
         .where(Mensaje.rol == "usuario", Mensaje.estado.in_((PENDIENTE, PROCESANDO)))
