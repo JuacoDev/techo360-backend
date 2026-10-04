@@ -1,5 +1,12 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# Duracion del token de acceso (JWT). Valor UNICO: lo usan routers/auth.py y
+# services/auth_service.py. Antes era 1 h (duplicado en ambos archivos) y la
+# sesion se cerraba aunque el usuario estuviera activo: no hay refresh token.
+# Los tokens ya emitidos conservan su caducidad original; solo los nuevos
+# duran esto.
+ACCESS_TOKEN_EXPIRE_HOURS = 8
+
 
 class Settings(BaseSettings):
 
