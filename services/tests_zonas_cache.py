@@ -8,6 +8,7 @@ Uso:
 import gzip
 import inspect
 import json
+import os
 import threading
 import time
 import unittest
@@ -85,6 +86,16 @@ class _PipelineFalso:
         for clave, valor, ex in self._ops:
             self._r.set(clave, valor, ex=ex)
 
+
+# Por defecto las pruebas usan el doble en memoria de arriba. Con
+# TECHO360_TEST_REDIS=fakeredis se repiten contra fakeredis (un Redis simulado de
+# verdad, solo para pruebas: NO es dependencia de produccion; ver
+# services/tests_redis_fakeredis.py para como instalarlo en un entorno aparte).
+BACKEND_REDIS = "doble en memoria"
+if os.environ.get("TECHO360_TEST_REDIS") == "fakeredis":
+    from services.tests_redis_fakeredis import RedisFalso  # noqa: F811
+
+    BACKEND_REDIS = "fakeredis"
 
 CONTENIDO = {"type": "FeatureCollection", "features": [{"type": "Feature", "properties": {"nombre": "Ñandú"}}]}
 
@@ -530,4 +541,5 @@ class TestEndpoint(Base):
 
 
 if __name__ == "__main__":
+    print(f"[Redis de las pruebas: {BACKEND_REDIS}]")
     unittest.main()
