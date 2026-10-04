@@ -24,3 +24,8 @@ class Mensaje(BaseVector):
     # se inicializa en False/True por defecto.
     feedback_util = Column(Boolean, nullable=True)
     fecha = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    # Fase C (migracion 0002 de techo360-chatbot): estado del mensaje. Para los
+    # mensajes del ASISTENTE es siempre 'respondido'. Ver services/chatbot_estados.py.
+    estado = Column(Text, nullable=False, server_default="respondido")
+    error_detalle = Column(Text, nullable=True)
+    actualizado_en = Column(DateTime(timezone=True), nullable=False, server_default=func.now())

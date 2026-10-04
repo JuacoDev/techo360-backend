@@ -45,6 +45,15 @@ class Settings(BaseSettings):
     brevo_sender_name: str = "Techo 360"
     admin_alert_email: str = "juan.tellez@upb.edu.co"
 
+    # Fase C (estados de los mensajes del chatbot): interruptor del BLOQUEO.
+    # False (por defecto) = comportamiento de siempre (el mensaje del usuario se
+    # guarda 'respondido', sin estados ni 409). True = maquina de estados
+    # completa: pendiente -> procesando -> respondido/error, y una conversacion
+    # con un mensaje sin resolver no admite otro (409). Se activa con
+    # CHATBOT_BLOQUEO_PENDIENTES=true en el .env del VPS DESPUES de aplicar la
+    # migracion 0002 y de desplegar el frontend que muestra los estados.
+    chatbot_bloqueo_pendientes: bool = False
+
     # JWT
     jwt_secret_key: str
 
