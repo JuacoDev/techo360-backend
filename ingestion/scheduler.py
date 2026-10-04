@@ -49,9 +49,12 @@ CRON_SEMANAL = {"day_of_week": "mon", "hour": 3, "minute": 0}  # lunes 3am, hora
 # practicamente no cambian, no tiene sentido correrlo semanal. 1ro de
 # enero/abril/julio/octubre a las 4am (una hora despues del job semanal,
 # para no competir por CPU/red si algun trimestre coinciden el mismo dia).
-CRON_PRECALENTAMIENTO = {"hour": 3, "minute": 30}  # diario; TTL de los caches = 36 h > 24 h
-
 CRON_TRIMESTRAL = {"month": "1,4,7,10", "day": 1, "hour": 4, "minute": 0}
+
+# Refresco diario de los caches precalentados (D6). TTL de los caches = 36 h > 24 h.
+# La hora es la del reloj del contenedor (normalmente UTC), igual que los otros
+# jobs: 03:30 aqui NO es 03:30 hora de Colombia.
+CRON_PRECALENTAMIENTO = {"hour": 3, "minute": 30}
 
 
 async def _ya_corrio_hoy(redis_client, clave_base: str = "pipeline_datos") -> bool:

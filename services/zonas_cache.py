@@ -30,6 +30,7 @@ import hashlib
 import json
 import logging
 import re
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Callable
@@ -100,13 +101,14 @@ def serializar(contenido: dict) -> bytes:
 
 
 def _etag_de(cuerpo: bytes) -> str:
-    return hashlib.md5(cuerpo).hexdigest()
+    return hashlib.md5(cuerpo, usedforsecurity=False).hexdigest()  # no es criptografia; evita el error en Python con FIPS
 
 
 class ZonasCache:
     def __init__(self, cliente=None):
         self._cliente = cliente
         self._sin_redis_hasta = 0.0
+        self._cerrojo_cliente = threading.Lock()
 
     def redis_disponible(self) -> bool:
         """False mientras el circuito este abierto (hubo un fallo reciente)."""
@@ -118,12 +120,14 @@ class ZonasCache:
     @property
     def cliente(self):
         if self._cliente is None:
-            self._cliente = redis.Redis.from_url(
-                settings.redis_url,
-                decode_responses=False,
-                socket_connect_timeout=TIMEOUT_CONEXION_SEGUNDOS,
-                socket_timeout=TIMEOUT_LECTURA_SEGUNDOS,
-            )
+            with self._cerrojo_cliente:  # una sola creacion aunque lleguen varios hilos a la vez
+                if self._cliente is None:
+                    self._cliente = redis.Redis.from_url(
+                        settings.redis_url,
+                        decode_responses=False,
+                        socket_connect_timeout=TIMEOUT_CONEXION_SEGUNDOS,
+                        socket_timeout=TIMEOUT_LECTURA_SEGUNDOS,
+                    )
         return self._cliente
 
     @staticmethod

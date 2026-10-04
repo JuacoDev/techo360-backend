@@ -4,11 +4,12 @@ import redis.asyncio as aioredis
 
 from core.config import settings
 
-# 24h -- los datos de densidad_poblacional no cambian intraday (la carga
+# 36 h (antes 24 h, ver TTL_SEGUNDOS) -- los datos de densidad_poblacional no cambian intraday (la carga
 # DANE es un proceso manual de una sola corrida por año, no un pipeline
 # que actualice varias veces al dia -- ver ingestion/actualizar_densidad_dane.py
 # en este repo). No hace falta invalidacion explicita atada al pipeline
-# de carga: si se recarga un año, el cache viejo expira solo en <=24h.
+# de carga: si se recarga un año, el cache viejo expira solo en <=36h (el precalentamiento
+# de services/precalentamiento.py lo refresca a diario a las 03:30).
 # 36 h (antes 24 h): mayor que el refresco diario de services/precalentamiento.py,
 # para que nunca haya un hueco entre que expira una entrada y se reescribe.
 TTL_SEGUNDOS = 36 * 60 * 60
