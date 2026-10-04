@@ -1,0 +1,351 @@
+"""Verificacion de services/zonas_cache.py y de GET /api/zonas con cache (D6).
+unittest (stdlib), igual que services/tests_score_privacion.py. Usa un Redis
+SIMULADO en memoria: no toca Redis ni la base reales.
+
+Uso:
+    python -m services.tests_zonas_cache
+"""
+import gzip
+import inspect
+import json
+import threading
+import time
+import unittest
+from unittest.mock import patch
+
+import redis
+from fastapi import FastAPI
+from fastapi.responses import JSONResponse
+from fastapi.testclient import TestClient
+
+from services import zonas_cache as modulo
+from services.zonas_cache import ZonasCache, resolver, serializar
+
+
+class RedisFalso:
+    """Lo minimo de redis.Redis que usa ZonasCache."""
+
+    def __init__(self):
+        self.datos: dict[str, bytes] = {}
+        self.vencimientos: dict[str, int] = {}
+        self.caido = False
+        self.escrituras = 0
+        self._cerrojo = threading.Lock()
+
+    def _revisar(self):
+        if self.caido:
+            raise redis.ConnectionError("Redis caido (simulado)")
+
+    @staticmethod
+    def _bytes(valor):
+        return valor if isinstance(valor, bytes) else str(valor).encode()
+
+    def get(self, clave):
+        self._revisar()
+        return self.datos.get(clave)
+
+    def mget(self, *claves):
+        self._revisar()
+        return [self.datos.get(c) for c in claves]
+
+    def set(self, clave, valor, nx=False, ex=None):
+        self._revisar()
+        with self._cerrojo:
+            if nx and clave in self.datos:
+                return None
+            self.datos[clave] = self._bytes(valor)
+            self.vencimientos[clave] = ex
+            self.escrituras += 1
+            return True
+
+    def delete(self, *claves):
+        self._revisar()
+        with self._cerrojo:
+            return sum(1 for c in claves if self.datos.pop(c, None) is not None)
+
+    def scan_iter(self, match=None, count=None):
+        self._revisar()
+        prefijo = match.rstrip("*")
+        return iter([c for c in list(self.datos) if c.startswith(prefijo)])
+
+    def pipeline(self, transaction=True):
+        return _PipelineFalso(self)
+
+
+class _PipelineFalso:
+    def __init__(self, redis_falso):
+        self._r = redis_falso
+        self._ops = []
+
+    def set(self, clave, valor, ex=None):
+        self._ops.append((clave, valor, ex))
+
+    def execute(self):
+        self._r._revisar()
+        for clave, valor, ex in self._ops:
+            self._r.set(clave, valor, ex=ex)
+
+
+CONTENIDO = {"type": "FeatureCollection", "features": [{"type": "Feature", "properties": {"nombre": "Ñandú"}}]}
+
+
+class Base(unittest.TestCase):
+    def setUp(self):
+        self.redis = RedisFalso()
+        self.cache = ZonasCache(self.redis)
+        self.llamadas = 0
+
+    def construir(self):
+        self.llamadas += 1
+        return CONTENIDO
+
+
+class TestHitMiss(Base):
+    def test_miss_calcula_y_hit_no_recalcula(self):
+        r1 = resolver(self.cache, "municipio", 2024, self.construir)
+        r2 = resolver(self.cache, "municipio", 2024, self.construir)
+        self.assertEqual(self.llamadas, 1)
+        self.assertEqual(r1.status, 200)
+        self.assertEqual(r1.encabezados["ETag"], r2.encabezados["ETag"])
+
+    def test_claves_versionadas(self):
+        resolver(self.cache, "departamento", 2024, self.construir)
+        self.assertIn("zonas:v1:departamento:2024", self.redis.datos)
+        self.assertIn("zonas:v1:departamento:2024:etag", self.redis.datos)
+
+    def test_ttl_en_cuerpo_y_etag_y_candado_liberado(self):
+        resolver(self.cache, "municipio", 2024, self.construir)
+        self.assertEqual(self.redis.vencimientos["zonas:v1:municipio:2024"], modulo.TTL_SEGUNDOS)
+        self.assertEqual(self.redis.vencimientos["zonas:v1:municipio:2024:etag"], modulo.TTL_SEGUNDOS)
+        self.assertNotIn("zonas:v1:lock:municipio:2024", self.redis.datos)
+
+    def test_candado_con_vencimiento_de_60_segundos(self):
+        self.assertTrue(self.cache.adquirir_lock("municipio", 2024))
+        self.assertEqual(self.redis.vencimientos["zonas:v1:lock:municipio:2024"], 60)
+        self.assertFalse(self.cache.adquirir_lock("municipio", 2024))
+
+    def test_cuerpo_con_gzip_y_sin_gzip_es_el_mismo_json(self):
+        con = resolver(self.cache, "municipio", 2024, self.construir, accept_encoding="gzip, deflate, br")
+        sin = resolver(self.cache, "municipio", 2024, self.construir, accept_encoding="identity")
+        self.assertEqual(con.encabezados["Content-Encoding"], "gzip")
+        self.assertNotIn("Content-Encoding", sin.encabezados)
+        self.assertEqual(gzip.decompress(con.cuerpo), sin.cuerpo)
+        self.assertEqual(json.loads(sin.cuerpo), CONTENIDO)
+        self.assertEqual(self.llamadas, 1)
+
+    def test_gzip_con_q0_no_se_considera_aceptado(self):
+        r = resolver(self.cache, "municipio", 2024, self.construir, accept_encoding="gzip;q=0, identity")
+        self.assertNotIn("Content-Encoding", r.encabezados)
+
+    def test_encabezados_de_cache(self):
+        r = resolver(self.cache, "municipio", 2024, self.construir)
+        self.assertEqual(r.encabezados["Cache-Control"], "private, no-cache")
+        self.assertEqual(r.encabezados["Vary"], "Accept-Encoding")
+
+    def test_serializar_igual_que_fastapi(self):
+        self.assertEqual(serializar(CONTENIDO), JSONResponse(CONTENIDO).body)
+
+
+class TestETag(Base):
+    def test_if_none_match_devuelve_304_sin_cuerpo(self):
+        etag = resolver(self.cache, "municipio", 2024, self.construir).encabezados["ETag"]
+        r = resolver(self.cache, "municipio", 2024, self.construir, if_none_match=etag)
+        self.assertEqual((r.status, r.cuerpo), (304, b""))
+        self.assertEqual(r.encabezados["ETag"], etag)
+
+    def test_etag_debil_y_comodin(self):
+        etag = resolver(self.cache, "municipio", 2024, self.construir).encabezados["ETag"]
+        self.assertEqual(resolver(self.cache, "municipio", 2024, self.construir, if_none_match="W/" + etag).status, 304)
+        self.assertEqual(resolver(self.cache, "municipio", 2024, self.construir, if_none_match="*").status, 304)
+        self.assertEqual(resolver(self.cache, "municipio", 2024, self.construir, if_none_match='"otro", ' + etag).status, 304)
+
+    def test_etag_distinto_devuelve_200_completo(self):
+        resolver(self.cache, "municipio", 2024, self.construir)
+        r = resolver(self.cache, "municipio", 2024, self.construir, if_none_match='"viejo"')
+        self.assertEqual(r.status, 200)
+        self.assertTrue(r.cuerpo)
+
+    def test_primera_peticion_con_if_none_match_calcula_y_responde_200(self):
+        r = resolver(self.cache, "municipio", 2024, self.construir, if_none_match='"viejo"')
+        self.assertEqual(r.status, 200)
+        self.assertEqual(self.llamadas, 1)
+
+
+class TestAniosNoValidos(Base):
+    def test_anio_no_cacheable_no_escribe_en_redis_y_calcula_siempre(self):
+        for anio in (2025, 2030, 1999, 99999):
+            resolver(self.cache, "municipio", anio, self.construir)
+        self.assertEqual(self.llamadas, 4)
+        self.assertEqual(self.redis.datos, {})
+        self.assertEqual(self.redis.escrituras, 0)
+
+    def test_anio_no_cacheable_responde_igual_que_siempre_sin_etag(self):
+        r = resolver(self.cache, "municipio", 2025, self.construir)
+        self.assertEqual(r.status, 200)
+        self.assertNotIn("ETag", r.encabezados)
+        self.assertEqual(json.loads(r.cuerpo), CONTENIDO)
+
+    def test_nivel_desconocido_no_se_cachea(self):
+        resolver(self.cache, "region", 2024, self.construir)
+        self.assertEqual(self.redis.datos, {})
+
+    def test_solo_2024_es_cacheable(self):
+        self.assertEqual(modulo.ANIOS_CACHEABLES, frozenset({2024}))
+
+
+class TestInvalidacion(Base):
+    def test_invalida_solo_zonas_y_no_toca_candados_ni_otras_claves(self):
+        resolver(self.cache, "municipio", 2024, self.construir)
+        resolver(self.cache, "departamento", 2024, self.construir)
+        self.redis.datos["proyeccion:v2:zonas:score_privacion:2027"] = b"x"
+        self.redis.datos["zonas:v1:lock:municipio:2024"] = b"1"
+        borradas = self.cache.invalidar()
+        self.assertEqual(borradas, 4)  # 2 niveles x (cuerpo + etag)
+        self.assertEqual(
+            sorted(self.redis.datos),
+            ["proyeccion:v2:zonas:score_privacion:2027", "zonas:v1:lock:municipio:2024"],
+        )
+
+    def test_tras_invalidar_se_recalcula(self):
+        resolver(self.cache, "municipio", 2024, self.construir)
+        self.cache.invalidar()
+        resolver(self.cache, "municipio", 2024, self.construir)
+        self.assertEqual(self.llamadas, 2)
+
+    def test_invalidar_cache_zonas_nunca_lanza(self):
+        self.redis.caido = True
+        with patch.object(modulo, "zonas_cache", self.cache):
+            self.assertEqual(modulo.invalidar_cache_zonas(), 0)
+
+    def test_invalidar_cache_zonas_devuelve_cuantas_borro(self):
+        resolver(self.cache, "municipio", 2024, self.construir)
+        with patch.object(modulo, "zonas_cache", self.cache):
+            self.assertEqual(modulo.invalidar_cache_zonas(), 2)
+
+
+class TestAntiEstampida(Base):
+    def test_quien_no_consigue_el_candado_espera_y_no_recalcula(self):
+        self.redis.datos["zonas:v1:lock:municipio:2024"] = b"1"  # otro proceso calculando
+
+        def otro_proceso():
+            time.sleep(0.3)
+            self.cache.guardar("municipio", 2024, serializar(CONTENIDO))
+
+        hilo = threading.Thread(target=otro_proceso)
+        with patch.object(modulo, "INTERVALO_ESPERA_SEGUNDOS", 0.05):
+            hilo.start()
+            r = resolver(self.cache, "municipio", 2024, self.construir)
+            hilo.join()
+        self.assertEqual(self.llamadas, 0)
+        self.assertEqual(r.status, 200)
+
+    def test_si_el_candado_no_se_libera_calcula_tras_el_tope(self):
+        self.redis.datos["zonas:v1:lock:municipio:2024"] = b"1"
+        with patch.object(modulo, "ESPERA_MAXIMA_SEGUNDOS", 0.2), patch.object(modulo, "INTERVALO_ESPERA_SEGUNDOS", 0.05):
+            r = resolver(self.cache, "municipio", 2024, self.construir)
+        self.assertEqual(self.llamadas, 1)
+        self.assertEqual(r.status, 200)
+
+    def test_cuatro_peticiones_simultaneas_calculan_una_sola_vez(self):
+        resultados = []
+
+        def lenta():
+            self.llamadas += 1
+            time.sleep(0.3)
+            return CONTENIDO
+
+        def peticion():
+            resultados.append(resolver(self.cache, "municipio", 2024, lenta))
+
+        with patch.object(modulo, "INTERVALO_ESPERA_SEGUNDOS", 0.05):
+            hilos = [threading.Thread(target=peticion) for _ in range(4)]
+            for h in hilos:
+                h.start()
+            for h in hilos:
+                h.join()
+        self.assertEqual(self.llamadas, 1)
+        self.assertEqual(len(resultados), 4)
+        self.assertEqual({r.encabezados["ETag"] for r in resultados}, {resultados[0].encabezados["ETag"]})
+
+    def test_el_candado_se_libera_aunque_construir_falle(self):
+        def falla():
+            raise RuntimeError("boom")
+
+        with self.assertRaises(RuntimeError):
+            resolver(self.cache, "municipio", 2024, falla)
+        self.assertNotIn("zonas:v1:lock:municipio:2024", self.redis.datos)
+
+
+class TestRedisCaido(Base):
+    def test_sirve_sin_cache_si_redis_falla(self):
+        self.redis.caido = True
+        r = resolver(self.cache, "municipio", 2024, self.construir)
+        self.assertEqual(r.status, 200)
+        self.assertNotIn("ETag", r.encabezados)
+        self.assertEqual(json.loads(r.cuerpo), CONTENIDO)
+
+
+class TestNadaDelUsuario(unittest.TestCase):
+    def test_construir_zonas_no_recibe_usuario(self):
+        from routers import zonas
+
+        self.assertEqual(list(inspect.signature(zonas._construir_zonas).parameters), ["nivel", "anio", "db"])
+
+
+class TestEndpoint(Base):
+    """GET /api/zonas completo (FastAPI TestClient) con cache simulada."""
+
+    def setUp(self):
+        super().setUp()
+        from db.session import get_db
+        from routers import zonas
+        from routers.auth import get_current_user
+
+        app = FastAPI()
+        app.include_router(zonas.router)
+        app.dependency_overrides[get_db] = lambda: None
+        app.dependency_overrides[get_current_user] = lambda: None
+        self.cliente = TestClient(app)
+        for p in (
+            patch.object(zonas, "zonas_cache", self.cache),
+            patch.object(zonas, "_construir_zonas", lambda nivel, anio, db: self.construir()),
+        ):
+            p.start()
+            self.addCleanup(p.stop)
+
+    def test_primera_200_segunda_304_y_encabezados(self):
+        r1 = self.cliente.get("/api/zonas?nivel=municipio&anio=2024")
+        self.assertEqual(r1.status_code, 200)
+        self.assertEqual(r1.json(), CONTENIDO)
+        self.assertEqual(r1.headers["content-type"], "application/json")
+        self.assertEqual(r1.headers["cache-control"], "private, no-cache")
+        etag = r1.headers["etag"]
+        r2 = self.cliente.get("/api/zonas?nivel=municipio&anio=2024", headers={"If-None-Match": etag})
+        self.assertEqual((r2.status_code, r2.content), (304, b""))
+        self.assertEqual(self.llamadas, 1)
+
+    def test_sin_anio_usa_2024_y_comparte_entrada(self):
+        self.cliente.get("/api/zonas?nivel=departamento")
+        self.cliente.get("/api/zonas?nivel=departamento&anio=2024")
+        self.assertEqual(self.llamadas, 1)
+
+    def test_respuesta_gzip_la_entrega_el_cliente_ya_descomprimida(self):
+        r = self.cliente.get("/api/zonas?nivel=municipio&anio=2024", headers={"Accept-Encoding": "gzip"})
+        self.assertEqual(r.headers.get("content-encoding"), "gzip")
+        self.assertEqual(r.json(), CONTENIDO)
+
+    def test_nivel_invalido_sigue_dando_422(self):
+        self.assertEqual(self.cliente.get("/api/zonas?nivel=region").status_code, 422)
+
+    def test_mismo_cuerpo_para_usuarios_distintos(self):
+        from routers.auth import get_current_user
+
+        a = self.cliente.get("/api/zonas?nivel=municipio&anio=2024").json()
+        self.cliente.app.dependency_overrides[get_current_user] = lambda: object()
+        b = self.cliente.get("/api/zonas?nivel=municipio&anio=2024").json()
+        self.assertEqual(a, b)
+        self.assertEqual(self.llamadas, 1)
+
+
+if __name__ == "__main__":
+    unittest.main()

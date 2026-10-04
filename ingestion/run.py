@@ -209,6 +209,11 @@ def run(
         f"{len(resultados['bloqueadas'])} bloqueadas, "
         f"{len(resultados['errores'])} con error"
     )
+    # El contenido de /api/zonas depende de lo que acaba de escribir esta
+    # corrida: se invalida su cache (D6). Mejor esfuerzo, nunca lanza.
+    from services.zonas_cache import invalidar_cache_zonas
+
+    invalidar_cache_zonas()
     return resultados
 
 

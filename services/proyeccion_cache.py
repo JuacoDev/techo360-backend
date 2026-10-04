@@ -9,7 +9,9 @@ from core.config import settings
 # que actualice varias veces al dia -- ver ingestion/actualizar_densidad_dane.py
 # en este repo). No hace falta invalidacion explicita atada al pipeline
 # de carga: si se recarga un año, el cache viejo expira solo en <=24h.
-TTL_SEGUNDOS = 24 * 60 * 60
+# 36 h (antes 24 h): mayor que el refresco diario de services/precalentamiento.py,
+# para que nunca haya un hueco entre que expira una entrada y se reescribe.
+TTL_SEGUNDOS = 36 * 60 * 60
 
 
 class ProyeccionCache:
