@@ -309,3 +309,14 @@ def invalidar_cache_zonas() -> int:
     except Exception as error:
         logger.warning("No se pudo invalidar el cache de zonas: %s", error)
         return 0
+
+
+if __name__ == "__main__":
+    # Invalidacion MANUAL del cache de /api/zonas. Para cargas de datos hechas
+    # fuera de run()/sincronizar_zonas() (p. ej. ingestion/actualizar_densidad_dane.py
+    # o proyeccion_2024.py): ejecutarla DENTRO del contenedor del backend, donde
+    # REDIS_URL apunta al Redis de produccion (redis://redis:6379/0):
+    #     docker exec techo360-backend python -m services.zonas_cache
+    # Desde un PC apuntaria al Redis del PC, no al de produccion.
+    logging.basicConfig(level=logging.INFO)
+    print(f"Entradas de cache de zonas borradas: {invalidar_cache_zonas()}")
