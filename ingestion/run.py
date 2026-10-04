@@ -7,6 +7,7 @@ falla -- en vez de fallar en silencio o insertar datos corruptos.
 Uso:
     python -m ingestion.run
 """
+import functools
 import logging
 from typing import Callable
 
@@ -65,7 +66,7 @@ ANIO_INICIO_BACKFILL_DEFAULT = 2008
 ANIO_FIN_BACKFILL_DEFAULT = 2024
 
 
-def run(
+def _ejecutar(
     anio: int | None = None,
     notificar_admin: Callable[[str, str], None] | None = None,
     valores_anio_anterior: dict[tuple[str, str], float] | None = None,
@@ -210,6 +211,21 @@ def run(
         f"{len(resultados['errores'])} con error"
     )
     return resultados
+
+
+@functools.wraps(_ejecutar)
+def run(*args, **kwargs):
+    """Ejecuta el pipeline (ver _ejecutar) y, pase lo que pase, invalida el
+    cache de /api/zonas al terminar (D6). El contenido de /api/zonas depende
+    de lo que haya escrito la corrida: invalidar tambien cuando la corrida
+    revienta a medias evita servir datos viejos tras una escritura parcial.
+    invalidar_cache_zonas() es de mejor esfuerzo y nunca lanza."""
+    try:
+        return _ejecutar(*args, **kwargs)
+    finally:
+        from services.zonas_cache import invalidar_cache_zonas
+
+        invalidar_cache_zonas()
 
 
 def backfill_historico(

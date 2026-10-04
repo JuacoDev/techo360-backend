@@ -9,6 +9,7 @@ from ingestion.scheduler import iniciar_scheduler
 from routers import auth, chatbot, health, otp, proyecciones ,usuarios, zonas, indicadores
 from services.chatbot_persistencia_consumer import iniciar_consumidor_persistencia
 from services.email_service import email_service
+from services.precalentamiento import precalentar_tras_arranque
 
 app = FastAPI(
     title="Techo 360 - Backend",
@@ -63,6 +64,11 @@ async def iniciar_pipeline_datos():
     # por llamada). Corre in-process aqui, misma filosofia que el
     # scheduler DANE arriba -- sin proceso separado sin necesidad real.
     app.state.conexion_persistencia_chatbot = await iniciar_consumidor_persistencia(settings.rabbitmq_url)
+
+    # D6: precalentar los caches ~90 s despues del arranque, en segundo plano
+    # (no bloquea el startup ni el chequeo de salud del despliegue). Se guarda
+    # la referencia para que el recolector no cancele la tarea.
+    app.state.tarea_precalentamiento = asyncio.create_task(precalentar_tras_arranque())
 
 
 @app.on_event("shutdown")

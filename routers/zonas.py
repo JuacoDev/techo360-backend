@@ -1,6 +1,6 @@
 import json
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -9,6 +9,7 @@ from models.mapcalor_user import MapCalorUser
 from routers.auth import get_current_user
 from schemas.zonas import GeoJSONFeatureCollection
 from services.score_privacion import calcular_score_privacion, normalizar_minmax
+from services.zonas_cache import resolver, zonas_cache
 
 
 router = APIRouter(
@@ -167,6 +168,7 @@ CODIGOS_DEPARTAMENTO_EXCLUIDOS = ["00"]
     }
 )
 def obtener_zonas(
+    request: Request,
     nivel: str = Query(
         ...,
         pattern="^(departamento|municipio)$",
@@ -189,6 +191,38 @@ def obtener_zonas(
     # queda para un futuro panel de administrador, fuera de este cambio).
     current_user: MapCalorUser = Depends(get_current_user)
 ):
+    # Cache Redis (D6, ver services/zonas_cache.py): el cuerpo ya viene
+    # serializado y comprimido, con ETag (If-None-Match -> 304). Se devuelve
+    # una Response directa, asi que no pasa por la validacion Pydantic de
+    # response_model (que solo sirve aqui para documentar el esquema).
+    # current_user solo exige sesion: el cuerpo NO depende del usuario.
+    # get_current_user comparte esta sesion de BD (FastAPI cachea la dependencia
+    # por peticion) y ya hizo una consulta: la sesion tiene una transaccion
+    # abierta y UNA CONEXION DEL POOL (5+10) retenida. Sin esto, esperar el
+    # candado (hasta 20 s) o un timeout de Redis (2 s) mantendria la conexion
+    # ocupada y bastarian ~16 peticiones simultaneas para agotar el pool de
+    # todo el backend. rollback() la libera; _construir_zonas la vuelve a
+    # tomar solo si de verdad hay que calcular.
+    db.rollback()
+    respuesta = resolver(
+        zonas_cache,
+        nivel,
+        anio,
+        lambda: _construir_zonas(nivel, anio, db),
+        if_none_match=request.headers.get("if-none-match"),
+        accept_encoding=request.headers.get("accept-encoding"),
+    )
+    return Response(
+        content=respuesta.cuerpo,
+        status_code=respuesta.status,
+        media_type=None if respuesta.status == 304 else "application/json",
+        headers=respuesta.encabezados,
+    )
+
+
+def _construir_zonas(nivel: str, anio: int, db: Session) -> dict:
+    """Construye la respuesta completa de /api/zonas (consultas, min-max,
+    score). Es el cuerpo que antes vivia directo en obtener_zonas()."""
     if nivel == "departamento":
         query = text("""
             SELECT
