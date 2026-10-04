@@ -484,6 +484,10 @@ def sincronizar_zonas(
         _notificar(f"Error sincronizando zonas ({adapter.nombre})", str(e))
         resultado["error"] = str(e)
 
+    # Cambiaron las geometrias de /api/zonas: invalidar su cache (D6).
+    from services.zonas_cache import invalidar_cache_zonas
+
+    invalidar_cache_zonas()
     return resultado
 
 

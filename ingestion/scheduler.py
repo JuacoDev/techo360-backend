@@ -51,6 +51,11 @@ CRON_SEMANAL = {"day_of_week": "mon", "hour": 3, "minute": 0}  # lunes 3am, hora
 # para no competir por CPU/red si algun trimestre coinciden el mismo dia).
 CRON_TRIMESTRAL = {"month": "1,4,7,10", "day": 1, "hour": 4, "minute": 0}
 
+# Refresco diario de los caches precalentados (D6). TTL de los caches = 36 h > 24 h.
+# La hora es la del reloj del contenedor (normalmente UTC), igual que los otros
+# jobs: 03:30 aqui NO es 03:30 hora de Colombia.
+CRON_PRECALENTAMIENTO = {"hour": 3, "minute": 30}
+
 
 async def _ya_corrio_hoy(redis_client, clave_base: str = "pipeline_datos") -> bool:
     """Guardia contra doble ejecucion. El backend se reinicia seguido
@@ -95,6 +100,18 @@ async def _job_pipeline(redis_client, database_url: str, notificar_admin):
         database_url=database_url,
     )
 
+    # run() ya invalido el cache de /api/zonas; se vuelve a calentar (D6).
+    from services.precalentamiento import precalentar
+
+    await precalentar(forzar=True)
+
+
+async def _job_precalentar():
+    """Refresco diario de los caches precalentados (D6)."""
+    from services.precalentamiento import precalentar
+
+    await precalentar(forzar=True)
+
 
 async def _job_zonas(redis_client, database_url: str, notificar_admin):
     """Mismo patron que _job_pipeline (guardia + thread aparte), pero con
@@ -115,6 +132,10 @@ async def _job_zonas(redis_client, database_url: str, notificar_admin):
         database_url=database_url,
         notificar_admin=notificar_admin,
     )
+
+    from services.precalentamiento import precalentar  # D6: sincronizar_zonas ya invalido el cache
+
+    await precalentar(forzar=True)
 
 
 def iniciar_scheduler(redis_client, database_url: str, notificar_admin=None) -> AsyncIOScheduler:
@@ -139,10 +160,18 @@ def iniciar_scheduler(redis_client, database_url: str, notificar_admin=None) -> 
         replace_existing=True,
         **CRON_TRIMESTRAL,
     )
+    scheduler.add_job(
+        _job_precalentar,
+        trigger="cron",
+        id="precalentamiento_diario",
+        replace_existing=True,
+        **CRON_PRECALENTAMIENTO,
+    )
     scheduler.start()
     logger.info(
         f"Scheduler del pipeline de datos iniciado "
-        f"(indicadores: {CRON_SEMANAL}, zonas IGAC: {CRON_TRIMESTRAL})."
+        f"(indicadores: {CRON_SEMANAL}, zonas IGAC: {CRON_TRIMESTRAL}, "
+        f"precalentamiento: {CRON_PRECALENTAMIENTO})."
     )
     return scheduler
 

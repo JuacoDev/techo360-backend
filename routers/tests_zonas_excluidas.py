@@ -30,7 +30,7 @@ class _DbFalso:
 
 def _llamar(nivel):
     db = _DbFalso()
-    respuesta = zonas.obtener_zonas(nivel=nivel, anio=2024, db=db, current_user=None)
+    respuesta = zonas._construir_zonas(nivel, 2024, db)
     return respuesta, db.consultas
 
 
