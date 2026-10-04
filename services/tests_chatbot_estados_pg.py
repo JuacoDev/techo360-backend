@@ -7,12 +7,18 @@ Uso:
     PG_BIN=C:/ruta/pgsql/bin MIGRACION_0002_SQL=C:/ruta/0002_mensajes_estado.sql \
         python -m services.tests_chatbot_estados_pg
 """
+import asyncio
 import threading
 import time
 import unittest
 import uuid
+from types import SimpleNamespace
+from unittest.mock import patch
 
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 
 from services import chatbot_estados as est
@@ -252,6 +258,268 @@ class TestCarreras(Base):
         m = est.marcar_error(self.db, est.crear_pendiente(self.db, 1, "a").id, "x")
         res = self._en_paralelo(2, lambda s, i: est.eliminar(s, m.id, 7))
         self.assertEqual(sorted(res), ["eliminado", "no_encontrado"])
+
+
+class TestIntentosYErrores(Base):
+    def test_intentos_se_incrementa_en_cada_paso_a_procesando(self):
+        m = est.marcar_procesando(self.db, est.crear_pendiente(self.db, 1, "a").id)
+        self.assertEqual(m.intentos, 1)
+        est.cancelar(self.db, m.id, 7)
+        self.assertEqual(est.reintentar(self.db, m.id, 7).intentos, 2)
+
+    def test_marcar_error_y_cerrar_solo_actuan_sobre_el_intento_vigente(self):
+        m = est.marcar_procesando(self.db, est.crear_pendiente(self.db, 1, "a").id)  # intento 1
+        est.cancelar(self.db, m.id, 7)
+        est.reintentar(self.db, m.id, 7)  # intento 2 vigente
+        self.assertIsNone(est.marcar_error(self.db, m.id, "tarde", intento=1))
+        self.assertIsNone(est.cerrar_respondido(self.db, m.id, "vieja", intento=1))
+        self.assertEqual(self.estado(m.id), "procesando")
+        self.assertEqual(self.contar(1, "asistente"), 0)
+        self.assertIsNotNone(est.cerrar_respondido(self.db, m.id, "nueva", intento=2))
+        self.assertEqual(self.estado(m.id), "respondido")
+
+    def test_un_error_de_integridad_que_no_es_el_indice_unico_no_se_confunde_con_un_409(self):
+        with self.assertRaises(IntegrityError):  # conversacion inexistente: viola la FK
+            est.crear_pendiente(self.db, 424242, "a")
+
+    def test_error_detalle_se_acota_a_500_caracteres(self):
+        m = est.marcar_procesando(self.db, est.crear_pendiente(self.db, 1, "a").id)
+        e = est.marcar_error(self.db, m.id, "x" * 900)
+        self.assertEqual(len(e.error_detalle), 500)
+
+
+class TestRouterConPostgresReal(Base):
+    """El router completo sobre Postgres de verdad: dos usuarios, pool y RPC cancelado vivo."""
+
+    def setUp(self):
+        super().setUp()
+        from db.session import get_db
+        from db.session_vector import get_db_vector
+        from routers import chatbot as router_chatbot
+        from routers.auth import get_current_user
+
+        self.router = router_chatbot
+        # Motor propio del router con UNA sola conexion: si algo la retiene durante el RPC, se nota.
+        self.engine_router = create_engine(self.url, pool_size=1, max_overflow=0, pool_timeout=3)
+        self.addCleanup(self.engine_router.dispose)
+        SesionRouter = sessionmaker(bind=self.engine_router, autoflush=False)
+        self.usuario = SimpleNamespace(id=7)
+
+        def db_vector():
+            sesion = SesionRouter()
+            try:
+                yield sesion
+            finally:
+                sesion.close()
+
+        app = FastAPI()
+        app.include_router(router_chatbot.router)
+        app.dependency_overrides[get_db_vector] = db_vector
+        app.dependency_overrides[get_db] = lambda: SimpleNamespace(rollback=lambda: None)
+        app.dependency_overrides[get_current_user] = lambda: self.usuario
+        self.cliente = TestClient(app)
+        self.rpc_llamadas = []
+        self.guion = []  # un comportamiento por llamada al RPC (en orden)
+
+        async def rpc(payload):
+            self.rpc_llamadas.append(payload)
+            comportamiento = self.guion.pop(0) if self.guion else {"respuesta": {"status": "ok", "response": "ok"}}
+            if "alcanzado" in comportamiento:
+                comportamiento["alcanzado"].set()
+            if "espera" in comportamiento:
+                await asyncio.get_running_loop().run_in_executor(None, comportamiento["espera"].wait, 20)
+            if "durante" in comportamiento:
+                comportamiento["durante"]()
+            if "error" in comportamiento:
+                raise comportamiento["error"]
+            return comportamiento["respuesta"]
+
+        for p in (
+            patch.object(router_chatbot, "solicitar_chatbot", rpc),
+            patch.object(router_chatbot.settings, "chatbot_bloqueo_pendientes", True),
+        ):
+            p.start()
+            self.addCleanup(p.stop)
+
+    def enviar(self, texto="hola", conversacion=1):
+        return self.cliente.post(f"/chatbot/conversaciones/{conversacion}/mensajes/enviar", json={"contenido": texto})
+
+    def esperar_estado(self, mensaje_id, estado, limite=10):
+        t0 = time.time()
+        while time.time() - t0 < limite:
+            if self.estado(mensaje_id) == estado:
+                return
+            time.sleep(0.05)
+        self.fail(f"el mensaje {mensaje_id} no llego a '{estado}' (esta en '{self.estado(mensaje_id)}')")
+
+    # ---------------------------------------------------------------- autorizacion con DOS usuarios
+    def test_dos_usuarios_reintentar_cancelar_eliminar_ajenos_dan_404_identico_al_de_un_id_inexistente(self):
+        m = est.marcar_error(self.db, est.crear_pendiente(self.db, 1, "pregunta privada del usuario 7").id, "x")  # conversacion 1 = usuario 7
+        self.usuario = SimpleNamespace(id=8)  # ahora actua el usuario 8
+        for metodo, ruta in (("post", "/chatbot/mensajes/{}/reintentar"), ("post", "/chatbot/mensajes/{}/cancelar"), ("delete", "/chatbot/mensajes/{}")):
+            ajeno = getattr(self.cliente, metodo)(ruta.format(m.id))
+            inexistente = getattr(self.cliente, metodo)(ruta.format(987654))
+            self.assertEqual(ajeno.status_code, 404, ruta)
+            self.assertEqual((ajeno.status_code, ajeno.content), (inexistente.status_code, inexistente.content), ruta)
+            self.assertNotIn("privada", ajeno.text)
+        self.assertEqual(self.estado(m.id), "error")  # intacto
+        self.assertEqual(self.rpc_llamadas, [])  # y no se llamo al asistente
+        self.assertEqual(self.enviar("hola", conversacion=1).status_code, 404)  # tampoco puede escribir en la conversacion ajena
+
+    def test_dos_usuarios_un_mensaje_ajeno_en_cualquier_estado_nunca_da_409(self):
+        m = est.marcar_error(self.db, est.crear_pendiente(self.db, 1, "a").id, "x")
+        self.usuario = SimpleNamespace(id=8)
+        for estado in ("error", "cancelado", "procesando", "pendiente"):
+            self.db.execute(text("UPDATE mensajes SET estado = :e WHERE id = :i"), {"e": estado, "i": m.id})
+            self.db.commit()
+            for metodo, ruta in (("post", f"/chatbot/mensajes/{m.id}/reintentar"), ("post", f"/chatbot/mensajes/{m.id}/cancelar"), ("delete", f"/chatbot/mensajes/{m.id}")):
+                self.assertEqual(getattr(self.cliente, metodo)(ruta).status_code, 404, f"{estado} {ruta}")
+
+    def test_dos_usuarios_cada_uno_ve_y_resuelve_solo_lo_suyo(self):
+        a = est.marcar_error(self.db, est.crear_pendiente(self.db, 1, "del 7").id, "x")
+        b = est.marcar_error(self.db, est.crear_pendiente(self.db, 3, "del 8").id, "x")
+        self.usuario = SimpleNamespace(id=8)
+        self.assertEqual(self.cliente.post(f"/chatbot/mensajes/{b.id}/cancelar").status_code, 200)
+        self.assertEqual(self.cliente.post(f"/chatbot/mensajes/{a.id}/cancelar").status_code, 404)
+        self.assertEqual((self.estado(a.id), self.estado(b.id)), ("error", "cancelado"))
+
+    # ---------------------------------------------------------------- sesiones / pool
+    def test_ninguna_conexion_del_pool_queda_retenida_durante_el_rpc(self):
+        en_vuelo = []
+        self.guion.append({"durante": lambda: en_vuelo.append(self.engine_router.pool.checkedout()), "respuesta": {"status": "ok", "response": "r"}})
+        r = self.enviar("hola")
+        self.assertEqual(r.status_code, 201)
+        self.assertEqual(en_vuelo, [0], "durante el RPC el pool (1 conexion) debe estar libre")
+
+    def test_reintentar_tampoco_retiene_la_conexion_durante_el_rpc(self):
+        m = est.marcar_error(self.db, est.crear_pendiente(self.db, 1, "a").id, "x")
+        en_vuelo = []
+        self.guion.append({"durante": lambda: en_vuelo.append(self.engine_router.pool.checkedout()), "respuesta": {"status": "ok", "response": "r"}})
+        self.assertEqual(self.cliente.post(f"/chatbot/mensajes/{m.id}/reintentar").status_code, 200)
+        self.assertEqual(en_vuelo, [0])
+
+    # ---------------------------------------------------------------- RPC cancelado que sigue vivo
+    def _enviar_en_hilo(self, texto, resultado):
+        hilo = threading.Thread(target=lambda: resultado.append(self.enviar(texto)))
+        hilo.start()
+        return hilo
+
+    def _id_del_mensaje_de_usuario(self):
+        return self.db.execute(text("SELECT id FROM mensajes WHERE conversacion_id = 1 AND rol = 'usuario'")).scalar()
+
+    def test_cancelar_y_reintentar_con_el_rpc_viejo_vivo_que_falla_mientras_el_nuevo_sigue_en_vuelo(self):
+        # El escenario del hallazgo 1: sin identificar el intento, el error tardio del RPC viejo
+        # pasaba el mensaje a 'error' y el reintento (aun en vuelo) ya no podia cerrarlo.
+        from services.chatbot_rpc_client import ChatbotTimeoutError
+
+        espera_a, alcanzado_a = threading.Event(), threading.Event()
+        espera_b, alcanzado_b = threading.Event(), threading.Event()
+        self.guion += [
+            {"espera": espera_a, "alcanzado": alcanzado_a, "error": ChatbotTimeoutError("tarde")},  # RPC-A (viejo)
+            {"espera": espera_b, "alcanzado": alcanzado_b, "respuesta": {"status": "ok", "response": "respuesta B"}},  # RPC-B (reintento)
+        ]
+        res_a, res_b = [], []
+        hilo_a = self._enviar_en_hilo("lento", res_a)
+        self.assertTrue(alcanzado_a.wait(10))
+        m_id = self._id_del_mensaje_de_usuario()
+        self.esperar_estado(m_id, "procesando")
+        self.assertEqual(self.cliente.post(f"/chatbot/mensajes/{m_id}/cancelar").status_code, 200)
+        hilo_b = threading.Thread(target=lambda: res_b.append(self.cliente.post(f"/chatbot/mensajes/{m_id}/reintentar")))
+        hilo_b.start()
+        self.assertTrue(alcanzado_b.wait(10))
+        espera_a.set()  # el RPC viejo falla AHORA, con el reintento aun esperando
+        hilo_a.join(15)
+        self.assertEqual(res_a[0].status_code, 409)  # su resultado se descarta
+        self.assertEqual(self.estado(m_id), "procesando")  # el reintento NO fue pisado
+        espera_b.set()
+        hilo_b.join(15)
+        self.assertEqual((res_b[0].status_code, res_b[0].json()["mensaje_asistente"]["contenido"]), (200, "respuesta B"))
+        self.assertEqual(self.estado(m_id), "respondido")
+        asistentes = self.db.execute(text("SELECT contenido FROM mensajes WHERE conversacion_id = 1 AND rol = 'asistente'")).scalars().all()
+        self.assertEqual(asistentes, ["respuesta B"])
+
+    def test_el_rpc_viejo_que_falla_despues_de_que_el_reintento_ya_respondio_no_cambia_nada(self):
+        from services.chatbot_rpc_client import ChatbotTimeoutError
+
+        espera_a, alcanzado_a = threading.Event(), threading.Event()
+        self.guion += [
+            {"espera": espera_a, "alcanzado": alcanzado_a, "error": ChatbotTimeoutError("tarde")},
+            {"respuesta": {"status": "ok", "response": "respuesta B"}},
+        ]
+        res_a = []
+        hilo = self._enviar_en_hilo("lento", res_a)
+        self.assertTrue(alcanzado_a.wait(10))
+        m_id = self._id_del_mensaje_de_usuario()
+        self.esperar_estado(m_id, "procesando")
+        self.cliente.post(f"/chatbot/mensajes/{m_id}/cancelar")
+        r_b = self.cliente.post(f"/chatbot/mensajes/{m_id}/reintentar")
+        self.assertEqual(r_b.status_code, 200)
+        espera_a.set()
+        hilo.join(15)
+        self.assertEqual(res_a[0].status_code, 409)
+        self.assertEqual(self.estado(m_id), "respondido")
+        self.assertEqual(self.contar(1, "asistente"), 1)
+
+    def test_cancelar_y_reintentar_con_el_rpc_viejo_vivo_que_responde_antes_que_el_nuevo(self):
+        espera_a, alcanzado_a = threading.Event(), threading.Event()
+        espera_b, alcanzado_b = threading.Event(), threading.Event()
+        self.guion += [
+            {"espera": espera_a, "alcanzado": alcanzado_a, "respuesta": {"status": "ok", "response": "respuesta A (vieja)"}},
+            {"espera": espera_b, "alcanzado": alcanzado_b, "respuesta": {"status": "ok", "response": "respuesta B (nueva)"}},
+        ]
+        res_a, res_b = [], []
+        hilo_a = self._enviar_en_hilo("lento", res_a)
+        self.assertTrue(alcanzado_a.wait(10))
+        m_id = self._id_del_mensaje_de_usuario()
+        self.esperar_estado(m_id, "procesando")
+        self.cliente.post(f"/chatbot/mensajes/{m_id}/cancelar")
+        hilo_b = threading.Thread(target=lambda: res_b.append(self.cliente.post(f"/chatbot/mensajes/{m_id}/reintentar")))
+        hilo_b.start()
+        self.assertTrue(alcanzado_b.wait(10))
+        espera_a.set()  # el viejo responde PRIMERO
+        hilo_a.join(15)
+        self.assertEqual(res_a[0].status_code, 409)
+        self.assertEqual(self.estado(m_id), "procesando")  # el intento nuevo sigue esperando
+        self.assertEqual(self.contar(1, "asistente"), 0)  # la respuesta vieja NO se guardo
+        espera_b.set()
+        hilo_b.join(15)
+        self.assertEqual((res_b[0].status_code, res_b[0].json()["mensaje_asistente"]["contenido"]), (200, "respuesta B (nueva)"))
+        self.assertEqual(self.estado(m_id), "respondido")
+        self.assertEqual(self.contar(1, "asistente"), 1)
+
+    def test_el_rpc_cancelado_que_responde_despues_no_guarda_nada(self):
+        espera, alcanzado = threading.Event(), threading.Event()
+        self.guion.append({"espera": espera, "alcanzado": alcanzado, "respuesta": {"status": "ok", "response": "llego tarde"}})
+        res = []
+        hilo = self._enviar_en_hilo("lento", res)
+        self.assertTrue(alcanzado.wait(10))
+        m_id = self._id_del_mensaje_de_usuario()
+        self.esperar_estado(m_id, "procesando")
+        self.cliente.post(f"/chatbot/mensajes/{m_id}/cancelar")
+        espera.set()
+        hilo.join(15)
+        self.assertEqual((res[0].status_code, res[0].json()["mensaje_usuario"]["estado"]), (409, "cancelado"))
+        self.assertEqual((self.estado(m_id), self.contar(1, "asistente")), ("cancelado", 0))
+
+    # ---------------------------------------------------------------- respuestas invalidas
+    def test_respuesta_invalida_del_asistente_deja_el_mensaje_en_error_no_procesando(self):
+        for rara in ({"status": "ok"}, {"status": "ok", "response": None}, "texto"):
+            self.guion.append({"respuesta": rara})
+            r = self.enviar("hola")
+            self.assertEqual(r.status_code, 502, str(rara))
+            self.assertEqual(r.json()["mensaje_usuario"]["estado"], "error")
+            self.db.execute(text("DELETE FROM mensajes WHERE conversacion_id = 1"))
+            self.db.commit()
+
+    def test_camino_feliz_y_bloqueo_409_con_el_router_real(self):
+        self.guion.append({"respuesta": {"status": "ok", "response": "r1"}})
+        self.assertEqual(self.enviar("uno").status_code, 201)
+        self.guion.append({"error": ConnectionError("rabbit")})
+        self.assertEqual(self.enviar("dos").status_code, 503)
+        r = self.enviar("tres")
+        self.assertEqual(r.status_code, 409)
+        self.assertEqual(r.json()["mensaje_pendiente"]["estado"], "error")
+        self.assertEqual(self.contar(1, "usuario"), 2)  # "tres" no se guardo
 
 
 class TestCompatibilidad(Base):
