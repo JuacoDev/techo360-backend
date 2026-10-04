@@ -207,30 +207,54 @@ def _respuesta_sin_cache(cuerpo: bytes) -> RespuestaZonas:
     return RespuestaZonas(200, cuerpo, _encabezados(BYPASS))
 
 
+class _GuardadoFallido(Exception):
+    """Se calculo bien pero Redis fallo al GUARDAR: lleva el cuerpo ya
+    calculado para servirlo sin volver a calcularlo (hallazgo 3b)."""
+
+    def __init__(self, cuerpo: bytes):
+        super().__init__("Redis fallo al guardar el cache de zonas")
+        self.cuerpo = cuerpo
+
+
+def _guardar_o_servir(cache: ZonasCache, nivel: str, anio: int, cuerpo: bytes) -> tuple[str, bytes]:
+    try:
+        return cache.guardar(nivel, anio, cuerpo)
+    except redis.RedisError as error:
+        raise _GuardadoFallido(cuerpo) from error
+
+
+def _calcular_teniendo_el_candado(cache: ZonasCache, nivel: str, anio: int, construir: Callable[[], dict]):
+    try:
+        existente = cache.obtener(nivel, anio)  # otro proceso pudo llenarlo justo antes
+        if existente is not None:
+            return existente, HIT
+        return _guardar_o_servir(cache, nivel, anio, serializar(construir())), MISS
+    finally:
+        try:
+            cache.liberar_lock(nivel, anio)
+        except redis.RedisError:
+            logger.warning("No se pudo liberar el candado de zonas; vence solo en %s s.", LOCK_SEGUNDOS)
+
+
 def _calcular_con_candado(cache: ZonasCache, nivel: str, anio: int, construir: Callable[[], dict]):
     """Devuelve ((etag, comprimido), estado): HIT si el cache ya estaba lleno
-    (lo lleno otro proceso), MISS si lo lleno esta peticion."""
-    if cache.adquirir_lock(nivel, anio):
-        try:
-            existente = cache.obtener(nivel, anio)  # otro proceso pudo llenarlo justo antes
-            if existente is not None:
-                return existente, HIT
-            return cache.guardar(nivel, anio, serializar(construir())), MISS
-        finally:
-            try:
-                cache.liberar_lock(nivel, anio)
-            except redis.RedisError:
-                logger.warning("No se pudo liberar el candado de zonas; vence solo en %s s.", LOCK_SEGUNDOS)
+    (lo lleno otro proceso), MISS si lo lleno esta peticion.
 
-    # Otro proceso esta calculando: esperar a que llene el cache.
+    Quien no consigue el candado espera, pero en cada vuelta vuelve a intentar
+    tomarlo: si el dueño fallo y lo libero (excepcion de BD, etc.) no se queda
+    durmiendo hasta el tope, toma el relevo y calcula (hallazgo 3a)."""
     limite = time.monotonic() + ESPERA_MAXIMA_SEGUNDOS
-    while time.monotonic() < limite:
-        time.sleep(INTERVALO_ESPERA_SEGUNDOS)
+    while True:
+        if cache.adquirir_lock(nivel, anio):
+            return _calcular_teniendo_el_candado(cache, nivel, anio, construir)
         existente = cache.obtener(nivel, anio)
         if existente is not None:
             return existente, HIT
+        if time.monotonic() >= limite:
+            break
+        time.sleep(INTERVALO_ESPERA_SEGUNDOS)
     logger.warning("zonas %s/%s: el candado no libero a tiempo; se calcula sin esperar.", nivel, anio)
-    return cache.guardar(nivel, anio, serializar(construir())), MISS
+    return _guardar_o_servir(cache, nivel, anio, serializar(construir())), MISS
 
 
 def resolver(
@@ -259,6 +283,10 @@ def resolver(
         estado = HIT
         if entrada is None:
             entrada, estado = _calcular_con_candado(cache, nivel, anio, construir)
+    except _GuardadoFallido as fallo:
+        logger.warning("Redis fallo al guardar zonas %s/%s (%s); se sirve lo calculado sin cache.", nivel, anio, fallo.__cause__)
+        cache.marcar_caido()
+        return _respuesta_sin_cache(fallo.cuerpo)
     except redis.RedisError as error:
         logger.warning("Redis no disponible para zonas %s/%s (%s); se sirve sin cache.", nivel, anio, error)
         cache.marcar_caido()

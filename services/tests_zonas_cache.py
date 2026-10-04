@@ -323,6 +323,62 @@ class TestAntiEstampida(Base):
         self.assertNotIn("zonas:v1:lock:municipio:2024", self.redis.datos)
 
 
+class TestCandadoYGuardado(Base):
+    """Hallazgos 3a y 3b de la revision."""
+
+    def test_si_el_dueño_falla_los_que_esperan_toman_el_relevo_sin_esperar_el_tope(self):
+        resultados = {}
+        estado = {"llamadas": 0}
+
+        def construir_dueño_falla():
+            estado["llamadas"] += 1
+            if estado["llamadas"] == 1:
+                time.sleep(0.2)
+                raise RuntimeError("BD caida")
+            return CONTENIDO
+
+        def dueño():
+            try:
+                resolver(self.cache, "municipio", 2024, construir_dueño_falla)
+            except RuntimeError as error:
+                resultados["dueño"] = error
+
+        def espera():
+            time.sleep(0.05)  # llega cuando el dueño ya tiene el candado
+            t0 = time.monotonic()
+            resultados["espera"] = resolver(self.cache, "municipio", 2024, construir_dueño_falla)
+            resultados["espera_segundos"] = time.monotonic() - t0
+
+        with patch.object(modulo, "INTERVALO_ESPERA_SEGUNDOS", 0.05), patch.object(modulo, "ESPERA_MAXIMA_SEGUNDOS", 10):
+            h1, h2 = threading.Thread(target=dueño), threading.Thread(target=espera)
+            h1.start(); h2.start(); h1.join(); h2.join()
+        self.assertIsInstance(resultados["dueño"], RuntimeError)
+        self.assertEqual(resultados["espera"].status, 200)
+        self.assertEqual(resultados["espera"].encabezados["X-Cache"], "MISS")
+        self.assertLess(resultados["espera_segundos"], 2)  # NO tuvo que agotar los 10 s de tope
+        self.assertEqual(estado["llamadas"], 2)
+
+    def test_si_redis_falla_al_guardar_no_se_calcula_dos_veces(self):
+        def guardar_falla(*args, **kwargs):
+            raise redis.ConnectionError("Redis cayo justo despues de calcular")
+
+        self.cache.guardar = guardar_falla
+        r = resolver(self.cache, "municipio", 2024, self.construir)
+        self.assertEqual(self.llamadas, 1)  # antes de la correccion: 2
+        self.assertEqual(r.status, 200)
+        self.assertEqual(r.encabezados["X-Cache"], "BYPASS")
+        self.assertEqual(json.loads(r.cuerpo), CONTENIDO)
+        self.assertFalse(self.cache.redis_disponible())  # y se abre el circuito
+
+    def test_el_candado_se_libera_tambien_si_el_guardado_falla(self):
+        def guardar_falla(*args, **kwargs):
+            raise redis.ConnectionError("x")
+
+        self.cache.guardar = guardar_falla
+        resolver(self.cache, "municipio", 2024, self.construir)
+        self.assertNotIn("zonas:v1:lock:municipio:2024", self.redis.datos)
+
+
 class TestRedisCaido(Base):
     def test_sirve_sin_cache_si_redis_falla(self):
         self.redis.caido = True
