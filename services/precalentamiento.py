@@ -44,7 +44,10 @@ ANIOS_PROYECCION = (2027, 2028, 2029, 2030)
 ANIO_ZONAS = 2024
 
 LOCK_CLAVE = "precalentamiento:lock"
-LOCK_SEGUNDOS = 15 * 60
+# 5 min (antes 15): el candado vive en Redis, que sobrevive a un reinicio del
+# backend. Si el proceso muere a mitad del precalentamiento, el candado huerfano
+# no debe bloquear al siguiente arranque durante 15 min.
+LOCK_SEGUNDOS = 5 * 60
 
 
 def _adquirir_lock_global() -> bool:
@@ -100,8 +103,18 @@ async def _precalentar_proyeccion(anio: int, forzar: bool) -> str:
     return "ok"
 
 
-async def precalentar(forzar: bool = False, pausa: float = PAUSA_ENTRE_ITEMS_SEGUNDOS) -> dict:
-    """Devuelve {item: resultado}. Nunca lanza."""
+async def precalentar(
+    forzar: bool = False,
+    pausa: float = PAUSA_ENTRE_ITEMS_SEGUNDOS,
+    forzar_zonas: bool | None = None,
+) -> dict:
+    """Devuelve {item: resultado}. Nunca lanza.
+
+    forzar_zonas (por defecto igual a `forzar`) permite forzar SOLO /api/zonas:
+    es barato (2 consultas) y asi un despliegue que cambie la forma de
+    _construir_zonas no sirve durante 36 h una entrada generada por el codigo
+    anterior (la clave solo se versiona a mano)."""
+    forzar_zonas = forzar if forzar_zonas is None else forzar_zonas
     resumen: dict[str, str] = {}
     try:
         if not await asyncio.to_thread(_adquirir_lock_global):
@@ -111,7 +124,7 @@ async def precalentar(forzar: bool = False, pausa: float = PAUSA_ENTRE_ITEMS_SEG
         logger.warning("Precalentamiento omitido, Redis no disponible: %s", error)
         return {"precalentamiento": f"omitido (Redis no disponible: {error})"}
 
-    items = [(f"zonas:{nivel}:{ANIO_ZONAS}", lambda nivel=nivel: asyncio.to_thread(_precalentar_zonas, nivel, ANIO_ZONAS, forzar))
+    items = [(f"zonas:{nivel}:{ANIO_ZONAS}", lambda nivel=nivel: asyncio.to_thread(_precalentar_zonas, nivel, ANIO_ZONAS, forzar_zonas))
              for nivel in NIVELES]
     items.append((f"proyeccion:limites_base:{ANIO_BASE_SCORE}", lambda: _precalentar_limites_base(forzar)))
     items += [(f"proyeccion:{INDICADOR_SCORE_PRIVACION}:{anio}", lambda anio=anio: _precalentar_proyeccion(anio, forzar))
@@ -141,7 +154,13 @@ async def precalentar_tras_arranque(demora: float = DEMORA_ARRANQUE_SEGUNDOS) ->
     competir con el chequeo de salud del despliegue."""
     try:
         await asyncio.sleep(demora)
-        await precalentar(forzar=False)
+        resumen = await precalentar(forzar=False, forzar_zonas=True)
+        if "otra instancia" in resumen.get("precalentamiento", ""):
+            # Candado huerfano de un arranque anterior (el proceso murio a mitad
+            # de un precalentamiento): reintentar UNA vez cuando venza.
+            logger.info("Precalentamiento omitido por candado ajeno; se reintenta en %s s.", LOCK_SEGUNDOS + 5)
+            await asyncio.sleep(LOCK_SEGUNDOS + 5)
+            await precalentar(forzar=False, forzar_zonas=True)
     except asyncio.CancelledError:
         raise
     except Exception:

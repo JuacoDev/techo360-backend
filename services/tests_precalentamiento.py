@@ -60,6 +60,16 @@ class TestPrecalentar(Base):
         self.assertEqual(pre.DEMORA_ARRANQUE_SEGUNDOS, 90)
         self.assertEqual(pre.PAUSA_ENTRE_ITEMS_SEGUNDOS, 2.0)
 
+    async def test_forzar_zonas_independiente_de_forzar(self):
+        self.parchear_items()
+        await pre.precalentar(forzar=False, pausa=0, forzar_zonas=True)
+        self.m_zonas.assert_any_call("municipio", 2024, True)
+        self.m_limites.assert_awaited_once_with(False)
+        self.m_proy.assert_any_await(2027, False)
+
+    async def test_el_candado_global_vence_en_5_minutos(self):
+        self.assertEqual(pre.LOCK_SEGUNDOS, 5 * 60)
+
     async def test_forzar_se_propaga(self):
         self.parchear_items()
         await pre.precalentar(forzar=True, pausa=0)
@@ -120,13 +130,46 @@ class TestTrasArranque(Base):
         async def dormir(segundos):
             llamadas.append(("sleep", segundos))
 
-        async def precalentar_falso(forzar=False, pausa=0):
-            llamadas.append(("precalentar", forzar))
+        async def precalentar_falso(forzar=False, pausa=0, forzar_zonas=None):
+            llamadas.append(("precalentar", forzar, forzar_zonas))
             return {}
 
         with patch.object(pre.asyncio, "sleep", dormir), patch.object(pre, "precalentar", precalentar_falso):
             await pre.precalentar_tras_arranque()
-        self.assertEqual(llamadas, [("sleep", 90), ("precalentar", False)])
+        # la proyeccion no se fuerza (30 s); /api/zonas SI (barato; ver hallazgo 9)
+        self.assertEqual(llamadas, [("sleep", 90), ("precalentar", False, True)])
+
+    async def test_reintenta_una_vez_si_el_candado_era_ajeno(self):
+        llamadas = []
+        respuestas = [{"precalentamiento": "omitido (otra instancia)"}, {"zonas": "ok"}]
+
+        async def dormir(segundos):
+            llamadas.append(("sleep", segundos))
+
+        async def precalentar_falso(forzar=False, pausa=0, forzar_zonas=None):
+            llamadas.append(("precalentar", forzar_zonas))
+            return respuestas.pop(0)
+
+        with patch.object(pre.asyncio, "sleep", dormir), patch.object(pre, "precalentar", precalentar_falso):
+            await pre.precalentar_tras_arranque()
+        self.assertEqual(
+            llamadas,
+            [("sleep", 90), ("precalentar", True), ("sleep", pre.LOCK_SEGUNDOS + 5), ("precalentar", True)],
+        )
+
+    async def test_no_reintenta_si_el_primer_intento_trabajo(self):
+        intentos = []
+
+        async def dormir(segundos):
+            return None
+
+        async def precalentar_falso(forzar=False, pausa=0, forzar_zonas=None):
+            intentos.append(1)
+            return {"zonas:municipio:2024": "ok"}
+
+        with patch.object(pre.asyncio, "sleep", dormir), patch.object(pre, "precalentar", precalentar_falso):
+            await pre.precalentar_tras_arranque()
+        self.assertEqual(len(intentos), 1)
 
     async def test_un_error_inesperado_no_tumba_el_arranque(self):
         async def dormir(segundos):
