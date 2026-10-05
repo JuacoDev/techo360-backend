@@ -7,7 +7,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from core.config import settings
 from ingestion.scheduler import iniciar_scheduler
 from routers import auth, chatbot, health, otp, proyecciones ,usuarios, zonas, indicadores
+from services import chatbot_estados
 from services.chatbot_persistencia_consumer import iniciar_consumidor_persistencia
+from db.session_vector import SessionLocalVector
 from services.email_service import email_service
 from services.precalentamiento import precalentar_tras_arranque
 
@@ -64,6 +66,20 @@ async def iniciar_pipeline_datos():
     # por llamada). Corre in-process aqui, misma filosofia que el
     # scheduler DANE arriba -- sin proceso separado sin necesidad real.
     app.state.conexion_persistencia_chatbot = await iniciar_consumidor_persistencia(settings.rabbitmq_url)
+
+    # Fase C: al arrancar ningun RPC al asistente sigue en vuelo (un solo worker):
+    # todo mensaje 'pendiente'/'procesando' quedo huerfano por el reinicio -> 'error',
+    # para que el usuario pueda reintentarlo o eliminarlo. Nunca tumba el arranque.
+    def _barrer_mensajes_huerfanos() -> int:
+        with SessionLocalVector() as db_vector:
+            return chatbot_estados.barrer_al_arrancar(db_vector)
+
+    try:
+        huerfanos = await asyncio.to_thread(_barrer_mensajes_huerfanos)
+        if huerfanos:
+            print(f"[chatbot] {huerfanos} mensaje(s) 'procesando' pasaron a 'error' por el reinicio")
+    except Exception as error:
+        print(f"[chatbot] no se pudo barrer los mensajes huerfanos (se ignora): {error}")
 
     # D6: precalentar los caches ~90 s despues del arranque, en segundo plano
     # (no bloquea el startup ni el chequeo de salud del despliegue). Se guarda
