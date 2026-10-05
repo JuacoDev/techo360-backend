@@ -42,6 +42,10 @@ class MensajeResponse(BaseModel):
     contenido: str
     feedback_util: bool | None
     fecha: datetime
+    # Fase C: valores por defecto para que un cliente/objeto sin estos campos
+    # (backend anterior a la migracion 0002) siga siendo valido.
+    estado: str = "respondido"
+    error_detalle: str | None = None
 
 
 class EnviarMensajeRequest(BaseModel):
@@ -54,3 +58,19 @@ class IntercambioResponse(BaseModel):
     # asistente para poder calificarlo despues (PATCH .../feedback).
     mensaje_usuario: MensajeResponse
     mensaje_asistente: MensajeResponse
+
+
+class ErrorConMensajeResponse(BaseModel):
+    """Cuerpo de 502/503/504 (y 409 por cancelado) al enviar o reintentar con
+    estados activos: `detail` sigue siendo un TEXTO (un frontend viejo lo muestra
+    igual) y `mensaje_usuario` trae el mensaje ya guardado, con su estado."""
+
+    detail: str
+    mensaje_usuario: MensajeResponse | None = None
+
+
+class ConversacionBloqueadaResponse(BaseModel):
+    """Cuerpo del 409 cuando la conversacion ya tiene un mensaje sin resolver."""
+
+    detail: str
+    mensaje_pendiente: MensajeResponse | None = None
