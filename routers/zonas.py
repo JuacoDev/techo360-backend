@@ -52,13 +52,80 @@ CODIGO_AGREGADO_NACIONAL_TERRIDATA = "01001"
 # umbral k=33% oficial -- aqui es un promedio simple de 3 componentes
 # con peso igual 1/3 cada uno.
 # Acueducto y alcantarillado se INVIERTEN (1 - normalizado) porque mas
-# cobertura = menos privacion; deficit_habitacional_total ya viene en
-# la direccion correcta (mas deficit = mas privacion), no se invierte.
+# cobertura = menos privacion; el deficit ya viene en la direccion
+# correcta (mas deficit = mas privacion), no se invierte.
 # densidad_poblacional queda fuera a proposito -- es ponderador visual
 # de tamaño/opacidad en el frontend, no se mezcla en el color del mapa.
+#
+# >>> AVISO: por que el componente de deficit es el CUANTITATIVO y no el
+# >>> TOTAL (corregido 23-sep-2026) -- doble conteo confirmado <<<
+# Hasta este cambio, el tercer componente era deficit_habitacional_total.
+# Eso contaba acueducto y alcantarillado DOS VECES: una como variables
+# independientes (los dos primeros terminos) y otra dentro del propio
+# deficit. Confirmado en la fuente oficial, no asumido -- se descargo el
+# anexo real del DANE que ya ingiere ingestion/dane_deficit_adapter.py
+# (deficit-hab-2020-anexo-nueva-metodologia.xlsx, hoja "Total
+# Municipios") y se leyeron las columnas de componentes que ese adapter
+# NO usa (11-28):
+#   - Deficit CUANTITATIVO (cols 11-14): Tipo de vivienda, Material de
+#     Paredes, Cohabitacion, Hacinamiento no mitigable. NINGUN
+#     componente de servicios publicos.
+#   - Deficit CUALITATIVO (cols 15-28): incluye explicitamente "Agua
+#     para cocinar" (col 21) y "Alcantarillado" (col 23), ademas de
+#     Cocina, Energia y Recoleccion de basuras.
+# Como deficit_habitacional_total = cuantitativo + cualitativo, el total
+# arrastra ese solapamiento; el cuantitativo no.
+#
+# MAGNITUD del solapamiento: el cociente (Agua para cocinar jerarquizado
+# + Alcantarillado jerarquizado) / hogares en deficit cualitativo tiene
+# mediana 0.677 sobre 1.121 municipios del anexo, y supera 0.5 en el
+# 68,8% de ellos. Los componentes NO son mutuamente excluyentes entre si
+# (un hogar puede tener varias carencias a la vez), asi que ese cociente
+# mide PESO, no una descomposicion exacta -- puede pasar de 1.
+#
+# CONFIRMACION EMPIRICA INDEPENDIENTE (mapcalordb, yearm=2024), que
+# coincide con lo que predice la estructura de componentes del anexo:
+#   corr(deficit_cualitativo,  cobertura_alcantarillado) = -0.358
+#   corr(deficit_total,        cobertura_alcantarillado) = -0.307
+#   corr(deficit_CUANTITATIVO, cobertura_alcantarillado) = -0.022
+#   corr(deficit_CUANTITATIVO, cobertura_acueducto)      = -0.073
+# El cuantitativo es practicamente ortogonal a las coberturas -- justo
+# lo que se espera de una variable que no las contiene.
+#
+# POR QUE ESTA OPCION Y NO LA CONTRARIA (quitar las coberturas y dejar
+# el deficit total): (1) mantiene la estructura Alkire-Foster de 3
+# componentes con peso 1/3, sin rediseñar el score; (2) las coberturas
+# son las UNICAS entradas del score con dato real observado (TerriData),
+# mientras que el deficit de 2024 es una proyeccion con fiabilidad 70%
+# (ver ingestion/proyeccion_2024.py) -- quitarlas dejaria el compuesto
+# reducido a una sola variable proyectada.
+#
+# IMPACTO MEDIDO antes de aplicar, sobre los 1.052 municipios con los 3
+# insumos completos (no una muestra chica): delta del score media
+# -0.1178, mediana -0.1180, rango -0.2943 a +0.0502; Pearson
+# actual-vs-nuevo 0.9392, Spearman (ranking) 0.9478; cambio de puesto en
+# el ranking mediana 62, p90 164, maximo 320, con 304 municipios
+# moviendose mas de 100 puestos. Es decir: el orden general se conserva
+# pero la reordenacion NO es trivial, y el score baja ~0.12 en promedio
+# para todos (el cuantitativo es de menor magnitud que el total) -- es
+# un cambio visible para el usuario, no cosmetico.
+#
+# LIMITE HONESTO de esta correccion: usar solo el cuantitativo descarta
+# la parte del deficit cualitativo que NO son servicios (hacinamiento
+# mitigable, pisos, cocina). La opcion mas fiel seria reconstruir un
+# "cualitativo sin servicios" a partir de las columnas de componentes
+# del anexo (que ya existen en la fuente, solo falta ingerirlas) y usar
+# cuantitativo + ese residuo. No se hizo aqui porque requiere extender
+# dane_deficit_adapter.py con variables nuevas; queda como mejora
+# pendiente, no como algo ya resuelto.
+#
+# IMPORTANTE: esto cambia solo QUE ENTRA AL SCORE COMPUESTO.
+# deficit_habitacional_total sigue siendo una de las 7 variables que se
+# exponen en properties.indicadores y se muestran en el panel -- no se
+# oculta ni se deja de calcular.
 VARIABLE_ACUEDUCTO = "cobertura_acueducto"
 VARIABLE_ALCANTARILLADO = "cobertura_alcantarillado"
-VARIABLE_DEFICIT_COMPUESTO = "deficit_habitacional_total"
+VARIABLE_DEFICIT_COMPUESTO = "deficit_habitacional_cuantitativo"
 
 
 def _normalizar_minmax(valor: float | None, minimo: float | None, maximo: float | None) -> float | None:
@@ -73,10 +140,13 @@ def _normalizar_minmax(valor: float | None, minimo: float | None, maximo: float 
 def _score_privacion(indicadores_zona: dict) -> float | None:
     """Score compuesto de privacion (0=mejor, 1=peor), promedio simple
     1/3 + 1/3 + 1/3 de acueducto invertido, alcantarillado invertido, y
-    deficit habitacional total (sin invertir). None si falta cualquiera
-    de los 3 insumos -- incluye el caso MpCodigo=00000 (Area en Litigio
-    Cauca-Huila), que no tiene fila real en mapcalordb para ninguna
-    variable, asi que cae aqui de forma natural sin caso especial."""
+    deficit habitacional CUANTITATIVO (sin invertir -- ver el aviso de
+    doble conteo arriba: el cuantitativo, a diferencia del total, no
+    contiene componentes de acueducto/alcantarillado). None si falta
+    cualquiera de los 3 insumos -- incluye el caso MpCodigo=00000 (Area
+    en Litigio Cauca-Huila), que no tiene fila real en mapcalordb para
+    ninguna variable, asi que cae aqui de forma natural sin caso
+    especial."""
     acueducto = indicadores_zona.get(VARIABLE_ACUEDUCTO, {}).get("score_normalizado")
     alcantarillado = indicadores_zona.get(VARIABLE_ALCANTARILLADO, {}).get("score_normalizado")
     deficit = indicadores_zona.get(VARIABLE_DEFICIT_COMPUESTO, {}).get("score_normalizado")
@@ -165,15 +235,19 @@ def obtener_zonas(
         # variables) -- se arma un dict en memoria, indexado por
         # (codigodivipola, namevar), y se cruza abajo por Feature. ---
         indicadores_por_codigo: dict[str, dict[str, dict]] = {}
+        # Query por-municipio (variables crudas para las 7 variables, un
+        # año) -- usada por la rama municipio directamente, y por la
+        # rama departamento para calcular el score_privacion promedio
+        # (ver AVISO mas abajo) sin duplicar el texto SQL entre ambas.
+        query_indicadores = text("""
+            SELECT codigodivipola, namevar, valuevar, originvar, intervaloconfianza
+            FROM public.mapcalordb
+            WHERE yearm = :anio
+              AND namevar = ANY(:variables)
+              AND codigodivipola IS NOT NULL
+              AND codigodivipola != :codigo_agregado_nacional
+        """)
         if nivel == "municipio":
-            query_indicadores = text("""
-                SELECT codigodivipola, namevar, valuevar, originvar, intervaloconfianza
-                FROM public.mapcalordb
-                WHERE yearm = :anio
-                  AND namevar = ANY(:variables)
-                  AND codigodivipola IS NOT NULL
-                  AND codigodivipola != :codigo_agregado_nacional
-            """)
             filas_indicadores = db.execute(
                 query_indicadores,
                 {
@@ -254,6 +328,73 @@ def obtener_zonas(
                     "anio_real": fila["yearm"]
                 }
 
+            # >>> AVISO -- score_privacion a nivel departamento (T-?, 26-sep-2026) <<<
+            # Se reusa LITERALMENTE el mismo score_privacion ya calculado
+            # por municipio (mismos insumos min-max que la rama
+            # nivel=municipio, misma _score_privacion()) -- no se
+            # recalcula un min-max nuevo a nivel departamento, para que
+            # sea "el mismo score", como se pidio explicitamente. Esto es
+            # una consulta SEPARADA de la de arriba (que solo trae UN
+            # valor arbitrario -- el mas reciente -- por variable y
+            # departamento, sin agregar entre municipios): aqui se
+            # necesita el dato de CADA municipio para promediarlo.
+            filas_indicadores_score = db.execute(
+                query_indicadores,
+                {
+                    "anio": anio,
+                    "variables": VARIABLES_INDICADORES,
+                    "codigo_agregado_nacional": CODIGO_AGREGADO_NACIONAL_TERRIDATA,
+                },
+            ).mappings().all()
+
+            valores_por_variable_score: dict[str, list[float]] = {v: [] for v in VARIABLES_INDICADORES}
+            for fila in filas_indicadores_score:
+                if fila["valuevar"] is not None:
+                    valores_por_variable_score[fila["namevar"]].append(float(fila["valuevar"]))
+            minmax_por_variable_score: dict[str, tuple[float | None, float | None]] = {
+                variable: (min(valores), max(valores)) if valores else (None, None)
+                for variable, valores in valores_por_variable_score.items()
+            }
+
+            indicadores_por_municipio_score: dict[str, dict[str, dict]] = {}
+            for fila in filas_indicadores_score:
+                codigo_mun = fila["codigodivipola"]
+                variable = fila["namevar"]
+                valor = float(fila["valuevar"]) if fila["valuevar"] is not None else None
+                minimo, maximo = minmax_por_variable_score.get(variable, (None, None))
+                indicadores_por_municipio_score.setdefault(codigo_mun, {})[variable] = {
+                    "score_normalizado": _normalizar_minmax(valor, minimo, maximo),
+                }
+
+            # >>> AVISO -- ponderacion SIMPLE, no por poblacion (decision
+            # explicita del usuario, 26-sep-2026) <<<
+            # El pedido original queria promedio ponderado por poblacion,
+            # con la clausula "si no hay variable de poblacion
+            # disponible, usar promedio simple y dejarlo documentado
+            # como tal". No hay una variable de poblacion TOTAL entre los
+            # 7 indicadores expuestos -- solo densidad_poblacional
+            # (hab/km2, no poblacion cruda). Derivarla exigiria una
+            # consulta PostGIS nueva (densidad x area, ST_Area sobre
+            # zonas_municipio.geom) que el usuario decidio NO agregar
+            # (mantener el cambio acotado a lo pedido) -- se usa promedio
+            # SIMPLE entre los municipios del departamento con score
+            # valido.
+            scores_por_departamento: dict[str, list[float]] = {}
+            for codigo_mun, indicadores_mun in indicadores_por_municipio_score.items():
+                score_mun = _score_privacion(indicadores_mun)
+                if score_mun is None:
+                    continue
+                codigo_depto = str(codigo_mun).strip().zfill(5)[:2]
+                scores_por_departamento.setdefault(codigo_depto, []).append(score_mun)
+
+            # None (no 0) para un departamento sin NINGUN municipio con
+            # score valido -- el frontend debe tratarlo como "sin dato"
+            # real, no como "privacion cero" (decision explicita del
+            # pedido).
+            score_privacion_por_departamento: dict[str, float | None] = {
+                depto: round(sum(scores) / len(scores), 4) for depto, scores in scores_por_departamento.items()
+            }
+
         features = []
 
         for zona in resultados:
@@ -289,10 +430,14 @@ def obtener_zonas(
                 # Score compuesto de privacion (T-49) -- None
                 # para MpCodigo=00000 (Area en Litigio) de forma natural,
                 # ya que esa zona no tiene score_normalizado en ninguna
-                # de las 3 variables que entran al compuesto. Solo se
-                # calcula a nivel municipio (el choropleth del mapa es
-                # a este nivel; departamento no lo necesita hoy).
+                # de las 3 variables que entran al compuesto.
                 properties["score_privacion"] = _score_privacion(properties["indicadores"])
+            else:
+                # Promedio simple de los score_privacion municipales del
+                # departamento (ver AVISO arriba) -- None (no 0) si
+                # NINGUN municipio del departamento tiene score valido,
+                # para que el frontend lo trate como "sin dato" real.
+                properties["score_privacion"] = score_privacion_por_departamento.get(zona["codigo"])
 
             features.append({
                 "type": "Feature",

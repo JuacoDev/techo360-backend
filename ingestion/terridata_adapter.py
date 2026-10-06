@@ -145,6 +145,17 @@ class TerriDataAdapter(DataSourceAdapter):
         # Se cachea el ZIP CRUDO (bytes comprimidos), no el texto
         # descomprimido -- mucho mas liviano en memoria. Volver a
         # descomprimir es costo de CPU, aceptable en este servidor.
+        #
+        # >>> AVISO -- candidato a Redis (25-sep-2026) <<<
+        # Mismo patron ad-hoc identificado en
+        # ingestion/dane_poblacion_adapter.py y
+        # ingestion/dane_deficit_adapter.py: cache SOLO en memoria de
+        # instancia, no sobrevive entre procesos/subprocesos. Este
+        # archivo NO se toco en el parche de disco aplicado al adaptador
+        # de poblacion (no forma parte de la carga 2025-2042 en curso)
+        # pero tiene la misma limitacion. Ver
+        # techo360-infra/REDIS_MIGRATION_CANDIDATES.txt -- el reemplazo
+        # correcto a futuro es Redis (ya en la infra del proyecto).
         self._cache_zip_bytes: dict[str, bytes] = {}
 
     def _obtener_enlace_dimension(self, client: httpx.Client, codigo_dimension: str) -> str:

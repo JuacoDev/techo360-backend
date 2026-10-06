@@ -6,7 +6,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from core.config import settings
 from ingestion.scheduler import iniciar_scheduler
-from routers import auth, health, otp, usuarios, zonas
+from routers import auth, chatbot, health, otp, proyecciones ,usuarios, zonas, indicadores
+from services.chatbot_persistencia_consumer import iniciar_consumidor_persistencia
 from services.email_service import email_service
 
 app = FastAPI(
@@ -32,8 +33,10 @@ app.include_router(health.router)
 app.include_router(otp.router)
 app.include_router(zonas.router)
 app.include_router(usuarios.router)
+app.include_router(proyecciones.router)
 app.include_router(auth.router)
-
+app.include_router(indicadores.router)
+app.include_router(chatbot.router)
 
 @app.on_event("startup")
 async def iniciar_pipeline_datos():
@@ -54,3 +57,16 @@ async def iniciar_pipeline_datos():
 
     redis_client = aioredis.from_url(settings.redis_url, decode_responses=True)
     iniciar_scheduler(redis_client, settings.database_url, notificar_admin)
+
+    # T-97 (rediseño): primer consumer de RabbitMQ que corre el backend
+    # (antes solo tenia el RPC client de proyeccion, que abre conexion
+    # por llamada). Corre in-process aqui, misma filosofia que el
+    # scheduler DANE arriba -- sin proceso separado sin necesidad real.
+    app.state.conexion_persistencia_chatbot = await iniciar_consumidor_persistencia(settings.rabbitmq_url)
+
+
+@app.on_event("shutdown")
+async def cerrar_conexiones():
+    conexion = getattr(app.state, "conexion_persistencia_chatbot", None)
+    if conexion is not None:
+        await conexion.close()

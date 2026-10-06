@@ -106,6 +106,30 @@ resuelve la coincidencia igual sin importar como se escriban.
 >>>
 >>> Valores de originVar en uso (reales, ya existentes, sin tocar):
 >>>   "TerriData"      -- dato real observado, via TerriDataAdapter.
+>>>       Para densidad_poblacional especificamente, ver
+>>>       "DANE-proyeccion-poblacion-2024" mas abajo -- reemplazo desde
+>>>       22-sep-2026, TerriData queda solo como fuente historica
+>>>       (años 2008-2023) para esta variable.
+>>>   "DANE-proyeccion-poblacion-{anio}" (agregado 22-sep-2026, ver
+>>>       ingestion/dane_poblacion_adapter.py y
+>>>       ingestion/actualizar_densidad_dane.py) -- dato real observado
+>>>       para densidad_poblacional, calculado como poblacion municipal
+>>>       DANE (anexo oficial PPED 2018-2042, publicado 08-ago-2025) /
+>>>       area_km2 (PostGIS sobre zonas_municipio.geom, capa canonica
+>>>       IGAC). Reemplaza a "TerriData" para esta variable en TODOS los
+>>>       municipios (no solo los gaps) para no dejarla dividida entre 2
+>>>       origenes distintos -- decision explicita del usuario tras
+>>>       confirmar con un sanity check en vivo que ambas fuentes
+>>>       coinciden casi exactamente (ratio mediana nueva/vieja = 1.00,
+>>>       p10=0.998, p90=1.002, sobre 1.102 municipios comparados).
+>>>       Cierra 2 de los 3 gaps de densidad_poblacional que TerriData
+>>>       nunca cubrio: San Andres (88001, TerriData solo publica el
+>>>       archipielago como agregado departamental 88000, nunca
+>>>       desagregado) y Nuevo Belen de Bajira (27493, municipio
+>>>       reciente). El tercer gap (00000, "Area En Litigio
+>>>       Cauca-Huila") sigue sin dato -- no tiene codigo de municipio
+>>>       en NINGUNA fuente ya investigada, territorio en disputa sin
+>>>       administracion municipal propia.
 >>>   "IGAC Catastro"  -- dato real observado, via IGACCatastroAdapter,
 >>>       PERO ver aviso especial sobre tenencia_informal_terrenos mas
 >>>       abajo -- esta fuente es un snapshot EN VIVO (capa ArcGIS del
@@ -114,6 +138,15 @@ resuelve la coincidencia igual sin importar como se escriban.
 >>>       realmente se consulto -- pedirle un año distinto via --anio no
 >>>       produce un dato real de ese año, produce el estado actual
 >>>       etiquetado con un año falso (ver caso documentado abajo).
+>>>       LIMITACION ADICIONAL (22-sep-2026): el 73% de los municipios
+>>>       (816/1.118) tienen valuevar=0.0 exacto para
+>>>       tenencia_informal_terrenos -- probablemente subestima la
+>>>       informalidad real (contraste con UPRA: solo 79/1.104
+>>>       municipios en banda 0%-25%), no una lectura genuina de "sin
+>>>       informalidad". Ver el docstring completo de
+>>>       ingestion/igac_catastro_adapter.py para la causa tecnica
+>>>       exacta y por que UPRA no se adopta todavia como reemplazo
+>>>       (solo PDF, vigencia fija en 2020). Sin corregir aun.
 >>>
 >>> >>> CASO REAL: tenencia_informal_terrenos quedo con UN SOLO año
 >>> >>> real (30/31-ago-2026) <<<
@@ -138,13 +171,26 @@ resuelve la coincidencia igual sin importar como se escriban.
 >>> reflejar esto (una sola año disponible), no inventar mas relleno.
 >>>
 >>> Valores de originVar para relleno (esquema de procedencia, Sprint 3):
->>>   "ultimo-valor-observado" -- baseline ingenuo (repetir el ultimo
->>>       valor real conocido). Usado para cobertura_acueducto/
->>>       cobertura_alcantarillado 2025-2026 (decision del 30-ago:
->>>       el LightGBM entrenado para estas dos variables especificas
->>>       queda PEOR que este mismo baseline en el set de test real ya
->>>       documentado -- no es defendible usar a proposito el metodo que
->>>       ya se sabe que es peor solo porque tambien es "un modelo").
+>>>   "proyeccion-ultimo-valor-observado-{anio}" (renombrado 22-sep-2026,
+>>>       ver ingestion/reetiquetar_ultimo_valor_observado.py -- ANTES
+>>>       "ultimo-valor-observado" sin prefijo, inconsistente con el
+>>>       resto del esquema y sin el prefijo "proyeccion-" que el
+>>>       frontend usa para clasificar la tarjeta como proyeccion en vez
+>>>       de fuente confirmada) -- baseline ingenuo (repetir el ultimo
+>>>       valor real conocido, sin ajuste). Usado para cobertura_acueducto/
+>>>       cobertura_alcantarillado 2025-2026, ambos anclados a {anio}=2024
+>>>       (decision del 30-ago-2026: el LightGBM entrenado para estas dos
+>>>       variables especificas queda PEOR que este mismo baseline en el
+>>>       set de test real ya documentado -- no es defendible usar a
+>>>       proposito el metodo que ya se sabe que es peor solo porque
+>>>       tambien es "un modelo"). Fiabilidad DINAMICA segun antiguedad
+>>>       (no un numero fijo como las otras dos proyecciones de abajo):
+>>>       fiabilidad = max(30, 60 - 10*(antiguedad-1)), antiguedad =
+>>>       yearm - anio_del_dato_real. Hoy: 60% para yearm=2025, 50% para
+>>>       yearm=2026 -- ver el docstring completo de
+>>>       ingestion/reetiquetar_ultimo_valor_observado.py para la
+>>>       justificacion de cada parametro de la formula (incluye RMSE
+>>>       real medido a distintas antiguedades, no un numero inventado).
 >>>   "interpolacion-lineal" -- interpolar entre dos puntos reales
 >>>       conocidos. Se intento para tenencia_informal_terrenos
 >>>       2024-2025 (30-ago-2026) pero se revirtio por completo (ver
@@ -189,13 +235,59 @@ resuelve la coincidencia igual sin importar como se escriban.
 >>>       honesta que calcular -- se reutiliza el snapshot 2026 tal cual
 >>>       para 2024, con fiabilidad BAJA (es el mismo dato de hoy, no una
 >>>       medicion de 2024).
+>>>   "proyeccion-regresion-lineal-4puntos" (agregado 23-sep-2026)
+>>>       -- densidad_poblacional hacia el futuro, calculado por
+>>>       techo360-proyeccion (GET /api/proyecciones). Regresion lineal
+>>>       por minimos cuadrados sobre los 4 ultimos puntos REALES del
+>>>       municipio (ventana elegida con un backtesting de 4 cortes, ver
+>>>       ese modulo), ajustada contra el año real de cada punto y con
+>>>       recorte en 0. La primera version uso solo 2 puntos, pero el
+>>>       ultimo par podia no representar la tendencia (Medellin,
+>>>       Barranquilla y Cali proyectaban caida teniendo serie al alza).
+>>>       Reemplazo a
+>>>       LightGBM para esta variable tras un backtesting contra los años
+>>>       reales 2019-2024 (RMSE 28.07 vs 223.89 del LightGBM recursivo,
+>>>       que ademas correlacionaba NEGATIVAMENTE, -0.212, con la
+>>>       tendencia real). Ver el docstring de app/services/proyeccion.py
+>>>       en techo360-proyeccion para la tabla completa y la limitacion
+>>>       conocida del backtesting (los "reales" son a su vez
+>>>       proyecciones DANE/TerriData, no mediciones independientes).
 >>>   "LightGBM-proyeccion" -- reservado para cuando un modelo entrenado
->>>       SI demuestre superar su baseline ingenuo correspondiente (ej.
->>>       si densidad_poblacional alguna vez necesitara proyeccion mas
->>>       alla de 2026 -- esa variable si supero el baseline en el
->>>       entrenamiento ya documentado). No usar este valor solo porque
->>>       el metodo "suena mas sofisticado" si la evidencia real dice
->>>       que un metodo mas simple generaliza mejor.
+>>>       SI demuestre superar su baseline ingenuo correspondiente. Sigue
+>>>       SIN USARSE: la ultima variable que lo iba a usar
+>>>       (densidad_poblacional) quedo descartada por el backtesting de
+>>>       arriba. No usar este valor solo porque el metodo "suena mas
+>>>       sofisticado" si la evidencia real dice que un metodo mas simple
+>>>       generaliza mejor.
+>>>
+>>> AVISO IMPORTANTE, no ocultar -- guardar_indicador() NO ESCALA a
+>>> cargas masivas (24-sep-2026, ver ingestion/actualizar_densidad_dane.py):
+>>> cada llamada abre y cierra su PROPIA conexion TCP via _conectar()
+>>> (psycopg2.connect(database_url) sin timeout de socket/statement).
+>>> Contra la VPS de produccion, alcanzable solo por Tailscale y sin
+>>> conexion directa (ver seccion "Acceso a la base de datos" en
+>>> techo360/CLAUDE.md), cada conexion nueva mide ~15-17 segundos
+>>> (handshake TCP+TLS+auth via el relay de Tailscale, no solo el ping
+>>> ~180ms) -- medido en vivo al intentar cargar ~2.200 filas de un
+>>> tiron, que a ese ritmo habria tomado ~9-10 horas. Ademas, sin
+>>> timeout, un corte transitorio del relay puede dejar una conexion
+>>> colgada indefinidamente en estado "idle in transaction" (visto en
+>>> vivo esa misma corrida) en vez de fallar limpio y reintentar.
+>>> Para menos de ~100-200 filas por corrida esto es aceptable (asi se
+>>> uso en T-92 a T-95 y en las correcciones puntuales de esta seccion).
+>>> Para cargas de miles de filas (ej. un rango de años, no un año
+>>> suelto), NO llamar a guardar_indicador() en un loop -- abrir UNA
+>>> conexion reutilizada para todo el lote/año y comitear al final. Ver
+>>> ingestion/actualizar_densidad_dane.py (funcion
+>>> guardar_indicadores_lote, agregada 24-sep-2026 especificamente para
+>>> esto) como referencia del patron alternativo: misma logica SQL de
+>>> UPDATE-antes-que-INSERT que este modulo, pero con la conexion como
+>>> parametro en vez de abrirla adentro. Se implemento LOCAL a ese
+>>> script, sin modificar guardar_indicador() aqui, para no tocar el
+>>> comportamiento que ya usan otros scripts de ingestion/ bajo presion
+>>> de una fecha de Sprint -- generalizar esto en db.py mismo (ej. que
+>>> guardar_indicador() acepte una conexion opcional) queda como mejora
+>>> pendiente, no urgente.
 """
 import logging
 
