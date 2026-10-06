@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from core.config import settings
 from ingestion.scheduler import iniciar_scheduler
-from routers import auth, chatbot, health, otp, proyecciones ,usuarios, zonas, indicadores
+from routers import auth, chatbot, health, otp, proyecciones ,usuarios, zonas, indicadores, reportes
 from services import chatbot_estados
 from services.chatbot_persistencia_consumer import iniciar_consumidor_persistencia
 from db.session_vector import SessionLocalVector
@@ -40,6 +40,7 @@ app.include_router(proyecciones.router)
 app.include_router(auth.router)
 app.include_router(indicadores.router)
 app.include_router(chatbot.router)
+app.include_router(reportes.router)
 
 @app.on_event("startup")
 async def iniciar_pipeline_datos():
