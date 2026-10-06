@@ -71,12 +71,30 @@ async def _procesar_evento(message: AbstractIncomingMessage) -> None:
             db.close()
 
 
+# aio-pika guarda en RobustConnection los canales, y en RobustChannel las
+# colas, con WeakSet (aio_pika/robust_connection.py y robust_channel.py:
+# `_queues = defaultdict(WeakSet)`). Tras reconectar, _on_open() restaura SOLO
+# lo que sigue vivo ahi. `channel` y `queue` son locales de
+# iniciar_consumidor_persistencia(); sin otra referencia fuerte el recolector
+# de basura los libera, el WeakSet queda vacio y la reconexion 'funciona' pero
+# no re-declara la cola ni re-registra el consumer (consumer_count=0, sin
+# excepcion ni log). Reproducido en local con aio-pika 9.4.3 tras recrear o
+# reiniciar RabbitMQ y cortar la red, y visto en produccion el 6-oct-2026
+# (T-126). Mismo parche que techo360-chatbot y techo360-proyeccion. Los
+# clientes RPC (chatbot_rpc_client, proyeccion_rpc_client) NO lo necesitan:
+# abren un canal y una cola de respuesta nuevos por peticion.
+_CHANNELS_VIVOS: list = []
+_QUEUES_VIVAS: list = []
+
+
 async def iniciar_consumidor_persistencia(rabbitmq_url: str) -> AbstractRobustConnection:
     connection = await aio_pika.connect_robust(rabbitmq_url)
     channel: AbstractChannel = await connection.channel()
+    _CHANNELS_VIVOS.append(channel)
     await channel.set_qos(prefetch_count=4)
 
     queue = await channel.declare_queue(EVENTOS_QUEUE, durable=True)
+    _QUEUES_VIVAS.append(queue)
     await queue.consume(_procesar_evento)
     logger.info("Consumidor de '%s' arrancado.", EVENTOS_QUEUE)
     return connection
