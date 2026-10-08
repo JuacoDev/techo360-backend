@@ -62,3 +62,11 @@ Resumen de la corrida: 6 fuentes OK, 0 registros rechazados, 0 advertencias, 1 b
 
 ### No verificado
 Reintentar con la cola ocupada y el posible 504 de nginx (ver el README del frontend); el reencolado de un mensaje en vuelo al recrear el chatbot; los proxies fuera del VPS.
+
+
+## Reportes asíncronos (8-oct-2026)
+
+La tabla `public.reportes` se creó a mano en `postgres-principal` (base `techo360_principal`) antes del deploy: `preparar_esquema_reportes` solo hace `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` y falla al arrancar si la tabla no existe. El DDL fue `CREATE TABLE IF NOT EXISTS` con las columnas de `models/reporte.py` más `estado`, `formato`, `solicitud`, `archivo_nombre` y `error`, y el índice `ix_reportes_usuario_id`. Cola nueva: `reportes_generacion` (la publica y la consume el backend).
+
+### Deuda: los archivos de reportes no persisten
+Los reportes generados se guardan en `data/reportes` dentro del contenedor, sin volumen. Cada recreación del contenedor del backend borra los archivos; las filas de `public.reportes` quedan con `estado = 'listo'` y `archivo_nombre` apuntando a un archivo que ya no existe. Pendiente: un volumen para `reportes_dir` (o almacenamiento externo) en el compose de infra.
