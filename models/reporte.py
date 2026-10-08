@@ -1,5 +1,7 @@
-from sqlalchemy import Column, Integer, Text, DateTime, ForeignKey
+from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.sql import func
+
 from db.session import Base
 
 
@@ -16,6 +18,11 @@ class Reporte(Base):
     )
     titulo = Column(Text, nullable=False)
     contenido = Column(Text, nullable=False)
+    estado = Column(String(20), nullable=False, default="listo", server_default="listo")
+    formato = Column(String(10), nullable=True)
+    solicitud = Column(JSONB, nullable=True)
+    archivo_nombre = Column(String(255), nullable=True)
+    error = Column(Text, nullable=True)
     fecha_creacion = Column(
         DateTime(timezone=True),
         nullable=False,

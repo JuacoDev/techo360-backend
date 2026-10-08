@@ -12,6 +12,8 @@ from services.chatbot_persistencia_consumer import iniciar_consumidor_persistenc
 from db.session_vector import SessionLocalVector
 from services.email_service import email_service
 from services.precalentamiento import precalentar_tras_arranque
+from services.reportes_consumer import iniciar_consumidor_reportes
+from services.reportes_service import preparar_esquema_reportes
 
 app = FastAPI(
     title="Techo 360 - Backend",
@@ -66,7 +68,12 @@ async def iniciar_pipeline_datos():
     # (antes solo tenia el RPC client de proyeccion, que abre conexion
     # por llamada). Corre in-process aqui, misma filosofia que el
     # scheduler DANE arriba -- sin proceso separado sin necesidad real.
+    await asyncio.to_thread(preparar_esquema_reportes)
     app.state.conexion_persistencia_chatbot = await iniciar_consumidor_persistencia(settings.rabbitmq_url)
+    (
+        app.state.conexion_reportes,
+        app.state.canal_reportes,
+    ) = await iniciar_consumidor_reportes(settings.rabbitmq_url)
 
     # Fase C: al arrancar ningun RPC al asistente sigue en vuelo (un solo worker):
     # todo mensaje 'pendiente'/'procesando' quedo huerfano por el reinicio -> 'error',
@@ -90,6 +97,10 @@ async def iniciar_pipeline_datos():
 
 @app.on_event("shutdown")
 async def cerrar_conexiones():
+    conexion_reportes = getattr(app.state, "conexion_reportes", None)
+    if conexion_reportes is not None:
+        await conexion_reportes.close()
+
     conexion = getattr(app.state, "conexion_persistencia_chatbot", None)
     if conexion is not None:
         await conexion.close()

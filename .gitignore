@@ -25,6 +25,7 @@ dist/
 # Cache de disco de descargas pesadas (ver AVISO en
 # ingestion/dane_poblacion_adapter.py -- temporal, candidato a Redis)
 data/cache/
+data/reportes/
 
 # Logs
 *.log

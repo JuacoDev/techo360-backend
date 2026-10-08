@@ -33,6 +33,9 @@ class Settings(BaseSettings):
     # Redis
     redis_url: str = "redis://localhost:6379/0"
 
+    # Archivos generados por el consumer de reportes
+    reportes_dir: str = "data/reportes"
+
     # RabbitMQ
     # NOTA: mismo criterio que database_url -- placeholder, no produccion.
     rabbitmq_url: str = (
