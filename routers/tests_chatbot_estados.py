@@ -442,6 +442,32 @@ class TestPublicarAviso(unittest.TestCase):
         with patch.object(rpc, "_get_connection", conexion_rota):
             asyncio.run(rpc.avisar_cancelacion(5, 2))  # no lanza
 
+    def test_exchange_ausente_o_sin_permiso_no_rompe_el_aviso(self):
+        """Si declarar el exchange falla (permisos, canal cerrado...), avisar_cancelacion no lanza y
+        cierra el canal: cancelar ya se hizo en la BD y es lo que importa."""
+        from services import chatbot_rpc_client as rpc
+
+        eventos = []
+
+        class Canal:
+            async def declare_exchange(self, *args, **kwargs):
+                raise RuntimeError("ACCESS_REFUSED o NOT_FOUND")
+
+            async def close(self):
+                eventos.append("cerrado")
+
+        class Conexion:
+            async def channel(self):
+                return Canal()
+
+        async def conexion_falsa():
+            return Conexion()
+
+        with patch.object(rpc, "_get_connection", conexion_falsa):
+            with self.assertLogs(rpc.logger, level="WARNING"):
+                asyncio.run(rpc.avisar_cancelacion(5, 2))
+        self.assertEqual(eventos, ["cerrado"])
+
 
 class TestCancelarYEliminar(Base):
     def test_cancelar_procesando_error_o_pendiente(self):
