@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 import uuid
 from typing import Any
 
@@ -8,6 +9,8 @@ from aio_pika import DeliveryMode, Message
 from aio_pika.abc import AbstractIncomingMessage, AbstractRobustConnection
 
 from core.config import settings
+
+logger = logging.getLogger(__name__)
 
 # Nombre de cola acordado con Daniel (pool de workers de laboratorio,
 # ver AVISO en techo360-chatbot/app/rabbitmq_consumer.py) -- no cambiar
@@ -39,6 +42,16 @@ REQUEST_QUEUE = "chatbot_requests"
 # laboratorio este offline -- a costa de que, en ese escenario, la UI
 # de "pensando" puede durar varios minutos en vez de fallar rapido.
 RPC_TIMEOUT_SECONDS = 200.0
+
+# Aviso de cancelacion (opcional, mejor esfuerzo): exchange fanout NO durable al que cada
+# consumer del chatbot (VPS y workers) se enlaza con su propia cola exclusiva. Un consumer
+# con imagen vieja no se enlaza y el aviso se pierde sin efecto. El nombre y el formato del
+# cuerpo ({"mensaje_id": int, "intento": int}) los comparte techo360-chatbot
+# (app/rabbitmq_consumer.py): no cambiar sin coordinar con ese extremo.
+EXCHANGE_CANCELACIONES = "chatbot_cancelaciones"
+# Un aviso solo importa mientras el intento cancelado pueda seguir vivo: tope del RPC
+# (200 s) mas margen para un mensaje que espera turno en la cola.
+TTL_AVISO_CANCELACION_S = 300
 
 _connection: AbstractRobustConnection | None = None
 _connection_lock = asyncio.Lock()
@@ -110,3 +123,27 @@ async def solicitar_chatbot(
             await reply_queue.delete()
     finally:
         await channel.close()
+
+
+async def avisar_cancelacion(mensaje_id: int, intento: int) -> None:
+    """Publica el aviso de que el `intento` de `mensaje_id` fue cancelado. De mejor
+    esfuerzo: nunca lanza (cancelar ya se hizo en la BD y es lo que importa); si falla,
+    solo queda en el log."""
+    try:
+        connection = await _get_connection()
+        channel = await connection.channel()
+        try:
+            exchange = await channel.declare_exchange(EXCHANGE_CANCELACIONES, aio_pika.ExchangeType.FANOUT, durable=False)
+            await exchange.publish(
+                Message(
+                    body=json.dumps({"mensaje_id": mensaje_id, "intento": intento}).encode(),
+                    content_type="application/json",
+                    delivery_mode=DeliveryMode.NOT_PERSISTENT,
+                    expiration=TTL_AVISO_CANCELACION_S,
+                ),
+                routing_key="",
+            )
+        finally:
+            await channel.close()
+    except Exception:  # noqa: BLE001 -- el aviso es opcional; no debe afectar a la cancelacion
+        logger.warning("No se pudo publicar el aviso de cancelacion (mensaje %s, intento %s)", mensaje_id, intento, exc_info=True)
