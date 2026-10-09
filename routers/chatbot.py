@@ -93,6 +93,7 @@ def listar_conversaciones(
     responses={
         401: {"description": "Requiere sesión iniciada."},
         404: {"description": "La conversacion no existe o no pertenece al usuario autenticado."},
+        422: {"description": "rol distinto de 'usuario' (las respuestas del asistente las escribe solo el servidor)."},
     },
 )
 def crear_mensaje(
@@ -109,7 +110,8 @@ def crear_mensaje(
     if conversacion is None:
         raise HTTPException(status_code=404, detail="Conversacion no encontrada.")
 
-    return chatbot_service.agregar_mensaje(db, conversacion_id, datos.rol, datos.contenido)
+    # SEGURIDAD: rol fijo del servidor, nunca el del cuerpo (el esquema ya rechaza "asistente").
+    return chatbot_service.agregar_mensaje(db, conversacion_id, "usuario", datos.contenido)
 
 
 @router.get(
