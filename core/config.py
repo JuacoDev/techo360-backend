@@ -57,6 +57,14 @@ class Settings(BaseSettings):
     # migracion 0002 y de desplegar el frontend que muestra los estados.
     chatbot_bloqueo_pendientes: bool = False
 
+    # Aviso de cancelacion al asistente: al cancelar un mensaje que se estaba procesando,
+    # el backend publica un aviso (mensaje_id + intento) en el exchange fanout
+    # `chatbot_cancelaciones` para que el worker que ya lo tiene deje de generar. Es
+    # opcional y de mejor esfuerzo: un chatbot/worker con imagen vieja lo ignora (sigue
+    # generando como siempre) y un fallo al publicar solo se registra. False = apagado
+    # (CHATBOT_AVISAR_CANCELACION=false en el .env), sin tocar nada mas.
+    chatbot_avisar_cancelacion: bool = True
+
     # JWT
     jwt_secret_key: str
 
