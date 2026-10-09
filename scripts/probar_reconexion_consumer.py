@@ -73,6 +73,7 @@ _m.SessionLocalVector = lambda: _DbFalsa()
 sys.modules["db.session_vector"] = _m
 _m = types.ModuleType("services.chatbot_service")
 _m.agregar_mensaje, _m.crear_conversacion = _agregar_mensaje, _crear_conversacion
+_m.conversacion_de_usuario = lambda _db, _cid, _uid: types.SimpleNamespace(id=_cid)  # el consumer verifica propiedad
 sys.modules["services.chatbot_service"] = _m
 _cfg = types.ModuleType("core.config")
 _cfg.settings = types.SimpleNamespace(rabbitmq_url=URL)
@@ -149,7 +150,7 @@ async def evento_se_persiste() -> bool:
         channel = await connection.channel()
         await channel.declare_queue(COLA, durable=True)
         await channel.default_exchange.publish(
-            Message(body=json.dumps({"tipo": "intercambio_completo", "usuario_id": 0,
+            Message(body=json.dumps({"tipo": "intercambio_completo", "usuario_id": 1,
                                      "consentimiento_entrenamiento": False,
                                      "mensaje_usuario": tag, "respuesta_asistente": "r"}).encode(),
                     content_type="application/json", delivery_mode=DeliveryMode.PERSISTENT),
