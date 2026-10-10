@@ -8,6 +8,7 @@ se saltan solas si no hay con que levantarlo. Requisitos:
                           de binarios de EnterpriseDB para Windows o una instalacion local.
   MIGRACION_0002_SQL      ruta a 0002_mensajes_estado.sql (migracion de la fase C; vive en
                           techo360-chatbot/migrations/ cuando se integre).
+  MIGRACION_0003_SQL      ruta a 0003_conversaciones_public_id.sql (techo360-chatbot/migrations/).
 
 El servidor escucha solo en 127.0.0.1, con autenticacion trust, en un directorio
 temporal que se borra al terminar. No toca ninguna base real.
@@ -49,8 +50,20 @@ def migracion_0002() -> str | None:
     return None
 
 
+def migracion_0003() -> str | None:
+    """0003_conversaciones_public_id.sql: el modelo Conversacion lee public_id, asi que
+    sin esta migracion las pruebas contra Postgres real no pueden correr."""
+    candidatas = [os.environ.get("MIGRACION_0003_SQL")]
+    aqui = pathlib.Path(__file__).resolve().parent.parent
+    candidatas.append(str(aqui.parent / "techo360-chatbot" / "migrations" / "0003_conversaciones_public_id.sql"))
+    for ruta in candidatas:
+        if ruta and pathlib.Path(ruta).is_file():
+            return pathlib.Path(ruta).read_text(encoding="utf-8")
+    return None
+
+
 def disponible() -> bool:
-    return bool(os.environ.get("PG_BIN")) and migracion_0002() is not None
+    return bool(os.environ.get("PG_BIN")) and migracion_0002() is not None and migracion_0003() is not None
 
 
 class ServidorDesechable:
@@ -97,6 +110,7 @@ def crear_base_con_esquema(servidor: ServidorDesechable, nombre: str):
         cur.execute("INSERT INTO conversaciones (id, usuario_id, consentimiento_entrenamiento) VALUES (%s, 0, false)", (900 + i,))
         cur.execute("INSERT INTO mensajes (id, conversacion_id, rol, contenido) VALUES (%s, %s, 'usuario', 'x')", (mid, 900 + i))
     cur.execute(migracion_0002())
+    cur.execute(migracion_0003())
     cur.execute("DELETE FROM conversaciones WHERE id BETWEEN 900 AND 905")  # cascada: borra esos 6
     cur.execute("SELECT setval('mensajes_id_seq', 1000); SELECT setval('conversaciones_id_seq', 1000)")
     con.close()

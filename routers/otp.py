@@ -1,25 +1,50 @@
+import ipaddress
+
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, EmailStr
 
 from services.otp_service import (
     OTPCooldownError,
+    OTPEmailLimitError,
     OTPInvalidError,
+    OTPIpDailyLimitError,
     OTPRateLimitError,
     OTPTooManyAttemptsError,
     otp_service,
 )
 
 
+def _ip_valida(valor: str) -> str | None:
+    try:
+        return str(ipaddress.ip_address(valor.strip()))
+    except ValueError:
+        return None
+
+
 def _obtener_ip_cliente(request: Request) -> str:
-    """X-Forwarded-For primero (la IP real del usuario, si hay un proxy
-    reenviando -- ver nginx.conf en techo360-frontend, location /api/ y
-    /auth/ ya lo hacen); si no viene, cae a la IP directa de la conexion.
-    request.client.host solo, sin esto, daria siempre la IP del propio
-    contenedor de nginx en produccion, no la del usuario real."""
-    forwarded = request.headers.get("x-forwarded-for")
+    """IP real del cliente, a prueba de cabeceras falsificadas.
+
+    El backend solo es alcanzable a traves del nginx de techo360-frontend (`location
+    /otp/` y `/auth/`), que fija `X-Real-IP $remote_addr` (SOBRESCRIBE lo que mande el
+    cliente) y AÑADE la IP real al FINAL de `X-Forwarded-For` (`$proxy_add_x_forwarded_for`).
+    Por eso:
+      1. X-Real-IP (si es una IP valida);
+      2. el ULTIMO valor de X-Forwarded-For (el que añadio nuestro proxy);
+      3. la IP directa de la conexion.
+    El PRIMER valor de X-Forwarded-For lo escribe el cliente: usarlo permitia saltarse el
+    limite por IP de /otp/request mandando una cabecera distinta en cada peticion.
+    SUPUESTO: un solo proxy de confianza delante. Si se agrega otro (p. ej. un terminador
+    TLS del dominio institucional) hay que revisar esto: X-Real-IP seria la IP de ese proxy."""
+    real = _ip_valida(request.headers.get("x-real-ip", ""))
+    if real:
+        return real
+    forwarded = request.headers.get("x-forwarded-for", "")
     if forwarded:
-        return forwarded.split(",")[0].strip()
+        ultimo = _ip_valida(forwarded.split(",")[-1])
+        if ultimo:
+            return ultimo
     return request.client.host if request.client else "desconocida"
+
 
 router = APIRouter(
     prefix="/otp",
@@ -51,8 +76,9 @@ class OTPResponse(BaseModel):
     responses={
         429: {
             "description": (
-                "Debe esperar antes de solicitar otro código OTP, o superó "
-                "el límite de solicitudes desde su IP en la ventana actual."
+                "Debe esperar antes de solicitar otro código OTP, superó el "
+                "límite de solicitudes desde su IP en la ventana actual (o su tope "
+                "diario), o ya se pidieron 5 códigos para ese correo en la última hora."
             )
         }
     }
@@ -72,6 +98,18 @@ async def request_otp(payload: RequestOTPRequest, request: Request):
         )
 
     except OTPCooldownError as e:
+        raise HTTPException(
+            status_code=429,
+            detail=str(e)
+        )
+
+    except OTPEmailLimitError as e:
+        raise HTTPException(
+            status_code=429,
+            detail=str(e)
+        )
+
+    except OTPIpDailyLimitError as e:
         raise HTTPException(
             status_code=429,
             detail=str(e)

@@ -49,6 +49,7 @@ class EstadosFalso:
     RESPONDIDO = estados_real.RESPONDIDO
     CANCELADO = estados_real.CANCELADO
     ConversacionBloqueada = estados_real.ConversacionBloqueada
+    CapacidadAgotada = estados_real.CapacidadAgotada
 
     def __init__(self):
         self.mensajes: dict[int, SimpleNamespace] = {}
@@ -69,6 +70,14 @@ class EstadosFalso:
     def barrer_colgados(self, db, minutos=4):
         self.llamadas.append("barrer_colgados")
         return 0
+
+    def verificar_capacidad(self, db, uid, max_por_usuario, max_cola):
+        self.llamadas.append("verificar_capacidad")
+        en_proceso = [m for m in self.mensajes.values() if m.rol == "usuario" and m.estado in ("pendiente", "procesando")]
+        if max_por_usuario > 0 and sum(1 for m in en_proceso if m.duenio == uid) >= max_por_usuario:
+            raise estados_real.CapacidadAgotada("usuario", max_por_usuario)
+        if max_cola > 0 and len(en_proceso) >= max_cola:
+            raise estados_real.CapacidadAgotada("cola", max_cola)
 
     def mensaje_sin_resolver(self, db, cid):
         return next((m for m in self.mensajes.values() if m.rol == "usuario" and m.estado in self.SIN_RESOLVER), None)

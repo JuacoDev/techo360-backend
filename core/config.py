@@ -1,3 +1,4 @@
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Duracion del token de acceso (JWT). Valor UNICO: lo usan routers/auth.py y
@@ -6,6 +7,31 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # Los tokens ya emitidos conservan su caducidad original; solo los nuevos
 # duran esto.
 ACCESS_TOKEN_EXPIRE_HOURS = 8
+
+# Limites por IP de /otp/request (ver services/otp_service.py). Los valores por defecto son los de
+# produccion; se pueden subir con OTP_IP_RATE_LIMIT_MAX / OTP_IP_DAILY_MAX en el .env (p. ej. una
+# demo con registro en vivo desde la red de la universidad, que comparte una sola IP).
+OTP_IP_RATE_LIMIT_MAX_DEFECTO = 10   # solicitudes por IP cada 15 minutos
+OTP_IP_DAILY_MAX_DEFECTO = 150       # solicitudes por IP cada 24 horas
+# Maximos admitidos: un valor MAYOR (o invalido) vuelve al DEFECTO, no al maximo -- un error de tipeo
+# (4000 en vez de 40) no puede dejar el limite practicamente apagado ni exponer el cupo de Brevo (300/dia).
+OTP_IP_RATE_LIMIT_MAX_MAXIMO = 100
+OTP_IP_DAILY_MAX_MAXIMO = 500
+
+
+def entero_positivo_o_defecto(valor, defecto: int, maximo: int | None = None) -> int:
+    """Entero > 0 (y <= `maximo`, si se da) leido de una variable de entorno. Vacio, no numerico
+    ("abc", "4.5"), cero, negativo o MAYOR que el maximo -> `defecto` (no el maximo): un valor mal
+    escrito NUNCA desactiva ni afloja de golpe un limite de seguridad."""
+    if isinstance(valor, bool):
+        return defecto
+    try:
+        n = int(str(valor).strip())
+    except (TypeError, ValueError):
+        return defecto
+    if n <= 0 or (maximo is not None and n > maximo):
+        return defecto
+    return n
 
 
 class Settings(BaseSettings):
@@ -65,6 +91,23 @@ class Settings(BaseSettings):
     # (CHATBOT_AVISAR_CANCELACION=false en el .env), sin tocar nada mas.
     chatbot_avisar_cancelacion: bool = True
 
+    # Admision de mensajes al asistente (solo con CHATBOT_BLOQUEO_PENDIENTES=true: usan los estados).
+    # Contados en la BD como mensajes de usuario en 'pendiente' o 'procesando' (los que de verdad
+    # esperan al asistente; 'error' y 'cancelado' no cuentan).
+    #  - por usuario: sin esto una cuenta abre N conversaciones y encola un mensaje en cada una.
+    #  - cola global: el asistente atiende pocos a la vez (2 consumidores, prefetch 1, ~20-45 s
+    #    cada uno) y el RPC del backend se rinde a los 200 s: con mas de ~10 esperando, los ultimos
+    #    ya no llegarian a tiempo. Se rechaza al entrar (503) en vez de encolar para fallar despues.
+    # 0 = sin limite. Se cambian con CHATBOT_MAX_EN_PROCESO_POR_USUARIO / CHATBOT_MAX_COLA en el .env.
+    chatbot_max_en_proceso_por_usuario: int = 2
+    chatbot_max_cola: int = 10
+
+    # /otp/request: tope por IP en la ventana de 15 min y por dia (ver services/otp_service.py). Variables
+    # OTP_IP_RATE_LIMIT_MAX (1..100) y OTP_IP_DAILY_MAX (1..500); vacio, no numerico, <= 0 o mayor que el
+    # maximo -> el valor por defecto (10 y 150).
+    otp_ip_rate_limit_max: int = OTP_IP_RATE_LIMIT_MAX_DEFECTO
+    otp_ip_daily_max: int = OTP_IP_DAILY_MAX_DEFECTO
+
     # Modo local (DESACTIVAR_TAREAS_DE_FONDO=1 en el .env): el evento startup no arranca NADA de
     # lo que toca recursos compartidos -- scheduler de ingesta, ALTER TABLE de reportes, consumers
     # de RabbitMQ (persistencia del chatbot y reportes), barrido de mensajes huerfanos ni el
@@ -72,6 +115,16 @@ class Settings(BaseSettings):
     # a servicios reales sin competir con el backend de produccion. Sin la variable (False) todo
     # arranca como siempre. En produccion NO debe definirse.
     desactivar_tareas_de_fondo: bool = False
+
+    @field_validator("otp_ip_rate_limit_max", mode="before")
+    @classmethod
+    def _otp_ip_rate_limit_max_valido(cls, valor):
+        return entero_positivo_o_defecto(valor, OTP_IP_RATE_LIMIT_MAX_DEFECTO, OTP_IP_RATE_LIMIT_MAX_MAXIMO)
+
+    @field_validator("otp_ip_daily_max", mode="before")
+    @classmethod
+    def _otp_ip_daily_max_valido(cls, valor):
+        return entero_positivo_o_defecto(valor, OTP_IP_DAILY_MAX_DEFECTO, OTP_IP_DAILY_MAX_MAXIMO)
 
     # JWT
     jwt_secret_key: str

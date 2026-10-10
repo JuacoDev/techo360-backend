@@ -139,7 +139,7 @@ class PruebasMarcaVerificado(unittest.TestCase):
         self.assertEqual(self._registrar().status_code, 201)
 
     def test_mayusculas_y_espacios_no_evitan_ni_rompen_la_marca(self):
-        self._poner_codigo(correo="Ana@ejemplo.co")  # EmailStr ya baja a minusculas el dominio
+        self._poner_codigo(correo="ana@ejemplo.co")  # las claves de Redis usan el correo normalizado
         self.assertEqual(self._verificar(correo="Ana@Ejemplo.co").status_code, 200)
         self.assertEqual(self._registrar(correo="ana@ejemplo.co").status_code, 201)
 

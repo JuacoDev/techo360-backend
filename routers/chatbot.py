@@ -97,21 +97,17 @@ def listar_conversaciones(
     },
 )
 def crear_mensaje(
-    conversacion_id: int,
+    conversacion_id: str,
     datos: CrearMensajeRequest,
     db: Session = Depends(get_db_vector),
     current_user: MapCalorUser = Depends(get_current_user),
 ):
-    conversacion = (
-        db.query(Conversacion)
-        .filter(Conversacion.id == conversacion_id, Conversacion.usuario_id == current_user.id)
-        .first()
-    )
+    conversacion = chatbot_service.resolver_conversacion(db, conversacion_id, current_user.id)
     if conversacion is None:
         raise HTTPException(status_code=404, detail="Conversacion no encontrada.")
 
     # SEGURIDAD: rol fijo del servidor, nunca el del cuerpo (el esquema ya rechaza "asistente").
-    return chatbot_service.agregar_mensaje(db, conversacion_id, "usuario", datos.contenido)
+    return chatbot_service.agregar_mensaje(db, conversacion.id, "usuario", datos.contenido)
 
 
 @router.get(
@@ -129,15 +125,11 @@ def crear_mensaje(
     },
 )
 def listar_mensajes(
-    conversacion_id: int,
+    conversacion_id: str,
     db: Session = Depends(get_db_vector),
     current_user: MapCalorUser = Depends(get_current_user),
 ):
-    conversacion = (
-        db.query(Conversacion)
-        .filter(Conversacion.id == conversacion_id, Conversacion.usuario_id == current_user.id)
-        .first()
-    )
+    conversacion = chatbot_service.resolver_conversacion(db, conversacion_id, current_user.id)
     if conversacion is None:
         raise HTTPException(status_code=404, detail="Conversacion no encontrada.")
 
@@ -147,7 +139,7 @@ def listar_mensajes(
 
     return (
         db.query(Mensaje)
-        .filter(Mensaje.conversacion_id == conversacion_id)
+        .filter(Mensaje.conversacion_id == conversacion.id)
         .order_by(Mensaje.fecha.asc(), Mensaje.id.asc())
         .all()
     )
@@ -184,7 +176,7 @@ def listar_mensajes(
     },
 )
 async def enviar_mensaje(
-    conversacion_id: int,
+    conversacion_id: str,
     datos: EnviarMensajeRequest,
     db: Session = Depends(get_db_vector),
     # Misma sesion que usa get_current_user (FastAPI cachea la dependencia por peticion):
@@ -192,11 +184,7 @@ async def enviar_mensaje(
     db_usuarios: Session = Depends(get_db),
     current_user: MapCalorUser = Depends(get_current_user),
 ):
-    conversacion = (
-        db.query(Conversacion)
-        .filter(Conversacion.id == conversacion_id, Conversacion.usuario_id == current_user.id)
-        .first()
-    )
+    conversacion = chatbot_service.resolver_conversacion(db, conversacion_id, current_user.id)
     if conversacion is None:
         raise HTTPException(status_code=404, detail="Conversacion no encontrada.")
 
@@ -207,7 +195,7 @@ async def enviar_mensaje(
     if settings.chatbot_bloqueo_pendientes:
         return await _enviar_con_estados(db, db_usuarios, conversacion, datos.contenido, current_user)
 
-    mensaje_usuario = chatbot_service.agregar_mensaje(db, conversacion_id, "usuario", datos.contenido)
+    mensaje_usuario = chatbot_service.agregar_mensaje(db, conversacion.id, "usuario", datos.contenido)
 
     try:
         respuesta = await solicitar_chatbot(
@@ -215,7 +203,7 @@ async def enviar_mensaje(
                 "mensaje": datos.contenido,
                 "usuario_id": current_user.id,
                 "consentimiento_entrenamiento": conversacion.consentimiento_entrenamiento,
-                "conversacion_id": conversacion_id,
+                "conversacion_id": conversacion.id,
             }
         )
     except ChatbotTimeoutError as error:
@@ -234,7 +222,7 @@ async def enviar_mensaje(
         raise HTTPException(status_code=502, detail=detail)
 
     mensaje_asistente = chatbot_service.agregar_mensaje(
-        db, conversacion_id, "asistente", respuesta["response"]
+        db, conversacion.id, "asistente", respuesta["response"]
     )
 
     return IntercambioResponse(mensaje_usuario=mensaje_usuario, mensaje_asistente=mensaje_asistente)
@@ -351,10 +339,41 @@ async def _procesar(
     return IntercambioResponse(mensaje_usuario=cerrado[0], mensaje_asistente=cerrado[1])
 
 
+def _respuesta_si_sin_capacidad(db: Session, usuario_id: int) -> JSONResponse | None:
+    """429 si el usuario ya tiene demasiados mensajes en proceso; 503 si la cola del asistente
+    esta llena (ver CHATBOT_MAX_* en core/config.py). None = hay lugar. No se guarda nada."""
+    try:
+        chatbot_estados.verificar_capacidad(
+            db, usuario_id, settings.chatbot_max_en_proceso_por_usuario, settings.chatbot_max_cola
+        )
+    except chatbot_estados.CapacidadAgotada as agotada:
+        if agotada.motivo == "usuario":
+            return JSONResponse(
+                status_code=429,
+                headers={"Retry-After": "30"},
+                content={
+                    "detail": f"Ya tienes {agotada.limite} mensajes en proceso. Espera a que el asistente responda (o cancela alguno) antes de enviar otro.",
+                    "mensaje_usuario": None,
+                },
+            )
+        return JSONResponse(
+            status_code=503,
+            headers={"Retry-After": "60"},
+            content={
+                "detail": "El asistente está atendiendo muchas solicitudes en este momento. Intenta de nuevo en un minuto.",
+                "mensaje_usuario": None,
+            },
+        )
+    return None
+
+
 async def _enviar_con_estados(
     db: Session, db_usuarios: Session, conversacion: Conversacion, contenido: str, current_user: MapCalorUser
 ):
     chatbot_estados.barrer_colgados(db)
+    sin_lugar = _respuesta_si_sin_capacidad(db, current_user.id)
+    if sin_lugar is not None:
+        return sin_lugar
     try:
         mensaje = chatbot_estados.crear_pendiente(db, conversacion.id, contenido)
     except chatbot_estados.ConversacionBloqueada as bloqueo:
@@ -396,6 +415,9 @@ async def reintentar_mensaje(
     current_user: MapCalorUser = Depends(get_current_user),
 ):
     chatbot_estados.barrer_colgados(db)
+    sin_lugar = _respuesta_si_sin_capacidad(db, current_user.id)
+    if sin_lugar is not None:  # el mensaje se queda como estaba (error|cancelado): se reintenta mas tarde
+        return sin_lugar
     mensaje = chatbot_estados.reintentar(db, mensaje_id, current_user.id)
     if mensaje is None:
         existente = chatbot_estados.obtener_de_usuario(db, mensaje_id, current_user.id)
