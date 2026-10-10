@@ -17,7 +17,13 @@ from schemas.auth import (
 from db.session import get_db
 from models.mapcalor_user import MapCalorUser
 from services.auth_service import autenticar_usuario, hashear_password
-from services.otp_service import OTPInvalidError, OTPTooManyAttemptsError, otp_service
+from services.otp_service import (
+    OTPInvalidError,
+    OTPNotVerifiedError,
+    OTPTooManyAttemptsError,
+    OTPVerificationUsedError,
+    otp_service,
+)
 from core.config import ACCESS_TOKEN_EXPIRE_HOURS, settings
 
 
@@ -92,12 +98,26 @@ def login(datos: LoginRequest, db: Session = Depends(get_db)):
         400: {
             "description": "El correo o nombre de usuario ya está registrado."
         },
+        403: {
+            "description": (
+                "El correo no tiene una verificacion OTP vigente (nunca se verifico, expiro "
+                "o ya se uso para otro registro)."
+            )
+        },
         422: {
             "description": "Datos de entrada inválidos."
         }
     }
 )
-def register(datos: RegisterRequest, db: Session = Depends(get_db)):
+async def register(datos: RegisterRequest, db: Session = Depends(get_db)):
+
+    # SEGURIDAD: el registro exige que /otp/verify haya dejado la marca de este correo.
+    # Se comprueba ANTES de consultar la base, asi un llamador sin verificar tampoco
+    # puede averiguar que correos o nombres ya existen.
+    try:
+        await otp_service.comprobar_verificado(datos.correo)
+    except (OTPNotVerifiedError, OTPVerificationUsedError) as e:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
 
     # Verificar si ya existe el correo
     usuario_correo = db.query(MapCalorUser).filter(
@@ -120,6 +140,14 @@ def register(datos: RegisterRequest, db: Session = Depends(get_db)):
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="El nombre de usuario ya está registrado"
         )
+
+    # La marca se consume solo cuando el registro va a hacerse (un correo o nombre ya
+    # tomado, arriba, no la gasta: se puede corregir y reintentar). Consumo atomico:
+    # de dos peticiones simultaneas con la misma marca, solo una registra.
+    try:
+        await otp_service.consumir_verificado(datos.correo)
+    except (OTPNotVerifiedError, OTPVerificationUsedError) as e:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
 
     # Crear usuario
     nuevo_usuario = MapCalorUser(
