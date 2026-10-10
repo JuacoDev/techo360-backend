@@ -5,6 +5,7 @@ from pydantic import BaseModel, EmailStr
 
 from services.otp_service import (
     OTPCooldownError,
+    OTPEmailLimitError,
     OTPInvalidError,
     OTPRateLimitError,
     OTPTooManyAttemptsError,
@@ -74,8 +75,9 @@ class OTPResponse(BaseModel):
     responses={
         429: {
             "description": (
-                "Debe esperar antes de solicitar otro código OTP, o superó "
-                "el límite de solicitudes desde su IP en la ventana actual."
+                "Debe esperar antes de solicitar otro código OTP, superó el "
+                "límite de solicitudes desde su IP en la ventana actual, o ya se "
+                "pidieron 5 códigos para ese correo en la última hora."
             )
         }
     }
@@ -95,6 +97,12 @@ async def request_otp(payload: RequestOTPRequest, request: Request):
         )
 
     except OTPCooldownError as e:
+        raise HTTPException(
+            status_code=429,
+            detail=str(e)
+        )
+
+    except OTPEmailLimitError as e:
         raise HTTPException(
             status_code=429,
             detail=str(e)

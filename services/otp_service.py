@@ -35,6 +35,13 @@ RESEND_COOLDOWN_SECONDS = 60       # no permitir reenviar antes de 60s
 IP_RATE_LIMIT_MAX = 10
 IP_RATE_LIMIT_WINDOW_SECONDS = 15 * 60
 
+# Tope por CORREO: el cooldown de 60 s por si solo permite 60 codigos por hora al mismo
+# destinatario (alguien podria usar el servicio para llenarle la bandeja a una victima
+# y gastar el cupo diario de Brevo). 5 por hora sobra para un usuario legitimo (pedir,
+# reintentar un par de veces) y acota ese abuso a 5/hora por destinatario.
+EMAIL_RATE_LIMIT_MAX = 5
+EMAIL_RATE_LIMIT_WINDOW_SECONDS = 60 * 60
+
 # Marca "correo verificado" (para /auth/register). /otp/verify la deja en Redis al
 # acertar el codigo y /auth/register la exige y la CONSUME (un registro por
 # verificacion). TTL corto: alcanza para que quien acaba de verificar termine el
@@ -55,6 +62,18 @@ class OTPRateLimitError(Exception):
     def __init__(self, seconds_remaining: int):
         self.seconds_remaining = seconds_remaining
         super().__init__(f"Demasiadas solicitudes de OTP desde esta IP. Espera {seconds_remaining}s.")
+
+
+class OTPEmailLimitError(Exception):
+    """Se superaron los codigos por hora permitidos para este correo."""
+
+    def __init__(self, seconds_remaining: int):
+        self.seconds_remaining = seconds_remaining
+        minutos = max(1, -(-seconds_remaining // 60))
+        super().__init__(
+            f"Ya se solicitaron {EMAIL_RATE_LIMIT_MAX} codigos para este correo en la ultima hora. "
+            f"Intenta de nuevo en {minutos} min."
+        )
 
 
 class OTPInvalidError(Exception):
@@ -84,14 +103,21 @@ class OTPService:
     def __init__(self):
         self._redis = aioredis.from_url(settings.redis_url, decode_responses=True)
 
+    @staticmethod
+    def _normalizar(email: str) -> str:
+        return email.strip().lower()
+
     def _code_key(self, email: str) -> str:
-        return f"otp:{email}:code"
+        return f"otp:{self._normalizar(email)}:code"
 
     def _attempts_key(self, email: str) -> str:
-        return f"otp:{email}:attempts"
+        return f"otp:{self._normalizar(email)}:attempts"
 
     def _cooldown_key(self, email: str) -> str:
-        return f"otp:{email}:cooldown"
+        return f"otp:{self._normalizar(email)}:cooldown"
+
+    def _email_rate_limit_key(self, email: str) -> str:
+        return f"otp:{self._normalizar(email)}:hourly"
 
     def _ip_rate_limit_key(self, ip: str) -> str:
         return f"otp:ip_limit:{ip}"
@@ -122,6 +148,18 @@ class OTPService:
             ttl_remaining = await self._redis.ttl(key)
             raise OTPRateLimitError(ttl_remaining if ttl_remaining > 0 else IP_RATE_LIMIT_WINDOW_SECONDS)
 
+    async def _check_email_rate_limit(self, email: str) -> None:
+        """INCR + EXPIRE en el primer hit (ventana fija, como el limite por IP). Si la clave
+        existe sin TTL (caida entre INCR y EXPIRE) se le pone: asi nunca bloquea para siempre."""
+        key = self._email_rate_limit_key(email)
+        count = await self._redis.incr(key)
+        ttl = await self._redis.ttl(key)
+        if count == 1 or ttl == -1:
+            await self._redis.expire(key, EMAIL_RATE_LIMIT_WINDOW_SECONDS)
+            ttl = EMAIL_RATE_LIMIT_WINDOW_SECONDS
+        if count > EMAIL_RATE_LIMIT_MAX:
+            raise OTPEmailLimitError(ttl if ttl > 0 else EMAIL_RATE_LIMIT_WINDOW_SECONDS)
+
     async def request_otp(self, email: str, to_name: str = "", ip: str | None = None) -> None:
         """Genera un OTP nuevo, lo guarda en Redis, y lo envia por correo.
 
@@ -136,6 +174,9 @@ class OTPService:
         ttl_remaining = await self._redis.ttl(cooldown_key)
         if ttl_remaining and ttl_remaining > 0:
             raise OTPCooldownError(ttl_remaining)
+
+        # Despues del cooldown (un reintento demasiado pronto no gasta el cupo por hora).
+        await self._check_email_rate_limit(email)
 
         code = self._generate_code()
         code_key = self._code_key(email)
