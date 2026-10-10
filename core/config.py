@@ -13,18 +13,25 @@ ACCESS_TOKEN_EXPIRE_HOURS = 8
 # demo con registro en vivo desde la red de la universidad, que comparte una sola IP).
 OTP_IP_RATE_LIMIT_MAX_DEFECTO = 10   # solicitudes por IP cada 15 minutos
 OTP_IP_DAILY_MAX_DEFECTO = 150       # solicitudes por IP cada 24 horas
+# Maximos admitidos: un valor MAYOR (o invalido) vuelve al DEFECTO, no al maximo -- un error de tipeo
+# (4000 en vez de 40) no puede dejar el limite practicamente apagado ni exponer el cupo de Brevo (300/dia).
+OTP_IP_RATE_LIMIT_MAX_MAXIMO = 100
+OTP_IP_DAILY_MAX_MAXIMO = 500
 
 
-def entero_positivo_o_defecto(valor, defecto: int) -> int:
-    """Entero > 0 leido de una variable de entorno. Vacio, no numerico ("abc", "4.5"), cero o
-    negativo -> `defecto`: un valor mal escrito NUNCA desactiva un limite de seguridad."""
+def entero_positivo_o_defecto(valor, defecto: int, maximo: int | None = None) -> int:
+    """Entero > 0 (y <= `maximo`, si se da) leido de una variable de entorno. Vacio, no numerico
+    ("abc", "4.5"), cero, negativo o MAYOR que el maximo -> `defecto` (no el maximo): un valor mal
+    escrito NUNCA desactiva ni afloja de golpe un limite de seguridad."""
     if isinstance(valor, bool):
         return defecto
     try:
         n = int(str(valor).strip())
     except (TypeError, ValueError):
         return defecto
-    return n if n > 0 else defecto
+    if n <= 0 or (maximo is not None and n > maximo):
+        return defecto
+    return n
 
 
 class Settings(BaseSettings):
@@ -96,7 +103,8 @@ class Settings(BaseSettings):
     chatbot_max_cola: int = 10
 
     # /otp/request: tope por IP en la ventana de 15 min y por dia (ver services/otp_service.py). Variables
-    # OTP_IP_RATE_LIMIT_MAX y OTP_IP_DAILY_MAX; vacio, no numerico o <= 0 -> el valor por defecto.
+    # OTP_IP_RATE_LIMIT_MAX (1..100) y OTP_IP_DAILY_MAX (1..500); vacio, no numerico, <= 0 o mayor que el
+    # maximo -> el valor por defecto (10 y 150).
     otp_ip_rate_limit_max: int = OTP_IP_RATE_LIMIT_MAX_DEFECTO
     otp_ip_daily_max: int = OTP_IP_DAILY_MAX_DEFECTO
 
@@ -111,12 +119,12 @@ class Settings(BaseSettings):
     @field_validator("otp_ip_rate_limit_max", mode="before")
     @classmethod
     def _otp_ip_rate_limit_max_valido(cls, valor):
-        return entero_positivo_o_defecto(valor, OTP_IP_RATE_LIMIT_MAX_DEFECTO)
+        return entero_positivo_o_defecto(valor, OTP_IP_RATE_LIMIT_MAX_DEFECTO, OTP_IP_RATE_LIMIT_MAX_MAXIMO)
 
     @field_validator("otp_ip_daily_max", mode="before")
     @classmethod
     def _otp_ip_daily_max_valido(cls, valor):
-        return entero_positivo_o_defecto(valor, OTP_IP_DAILY_MAX_DEFECTO)
+        return entero_positivo_o_defecto(valor, OTP_IP_DAILY_MAX_DEFECTO, OTP_IP_DAILY_MAX_MAXIMO)
 
     # JWT
     jwt_secret_key: str

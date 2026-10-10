@@ -33,11 +33,11 @@ RESEND_COOLDOWN_SECONDS = 60       # no permitir reenviar antes de 60s
 # necesitar autenticacion (este endpoint es pre-login a proposito).
 #
 # El tope se lee de la configuracion (OTP_IP_RATE_LIMIT_MAX, por defecto 10;
-# vacio, no numerico o <= 0 cae a 10 -- nunca desactiva el limite): la red de
+# vacio, no numerico, <= 0 o mayor que 100 cae a 10 -- nunca desactiva el limite): la red de
 # la universidad sale por UNA sola IP, asi que una demo con registro en vivo
 # puede necesitar subirlo (con 40 el peor caso de una IP pasa a 160/hora, que
 # agotaria el cupo diario de Brevo en menos de 2 h: por eso hay ademas un tope
-# DIARIO por IP, OTP_IP_DAILY_MAX, por defecto 150 = la mitad del cupo).
+# DIARIO por IP, OTP_IP_DAILY_MAX, por defecto 150 = la mitad del cupo; maximo 500).
 IP_RATE_LIMIT_MAX = OTP_IP_RATE_LIMIT_MAX_DEFECTO   # valor por defecto; el vigente es settings.otp_ip_rate_limit_max
 IP_RATE_LIMIT_WINDOW_SECONDS = 15 * 60
 IP_DAILY_LIMIT_MAX = OTP_IP_DAILY_MAX_DEFECTO       # valor por defecto; el vigente es settings.otp_ip_daily_max

@@ -19,7 +19,13 @@ from fakeredis import aioredis as fake_aioredis
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from core.config import Settings, entero_positivo_o_defecto, settings
+from core.config import (
+    OTP_IP_DAILY_MAX_MAXIMO,
+    OTP_IP_RATE_LIMIT_MAX_MAXIMO,
+    Settings,
+    entero_positivo_o_defecto,
+    settings,
+)
 from routers import otp as router_otp
 from services import otp_service as modulo_otp
 from services.otp_service import (
@@ -69,6 +75,40 @@ class PruebasValoresPorDefectoYEntorno(unittest.TestCase):
         self.assertEqual(entero_positivo_o_defecto(12, 7), 12)
         self.assertEqual(entero_positivo_o_defecto("12", 7), 12)
 
+    def test_maximos_100_por_15_min_y_500_por_dia(self):
+        self.assertEqual((OTP_IP_RATE_LIMIT_MAX_MAXIMO, OTP_IP_DAILY_MAX_MAXIMO), (100, 500))
+
+    def test_el_limite_de_15_min_acepta_hasta_100_y_lo_que_pasa_de_100_cae_al_defecto_no_al_maximo(self):
+        for ok_ in ("1", "40", "99", "100", " 100 "):
+            with self.subTest(valor=ok_):
+                self.assertEqual(_ajustes(otp_ip_rate_limit_max=ok_).otp_ip_rate_limit_max, int(ok_))
+        for mayor in ("101", "150", "1000", "999999", "4000", "100000000000000000000"):
+            with self.subTest(valor=mayor):
+                s = _ajustes(otp_ip_rate_limit_max=mayor)
+                self.assertEqual(s.otp_ip_rate_limit_max, 10)       # el defecto
+                self.assertNotEqual(s.otp_ip_rate_limit_max, 100)   # no el maximo
+
+    def test_el_tope_diario_acepta_hasta_500_y_lo_que_pasa_de_500_cae_al_defecto_no_al_maximo(self):
+        for ok_ in ("1", "150", "499", "500", " 500 "):
+            with self.subTest(valor=ok_):
+                self.assertEqual(_ajustes(otp_ip_daily_max=ok_).otp_ip_daily_max, int(ok_))
+        for mayor in ("501", "600", "5000", "999999"):
+            with self.subTest(valor=mayor):
+                s = _ajustes(otp_ip_daily_max=mayor)
+                self.assertEqual(s.otp_ip_daily_max, 150)           # el defecto
+                self.assertNotEqual(s.otp_ip_daily_max, 500)        # no el maximo
+
+    def test_invalido_en_cualquiera_de_las_dos_cae_al_defecto(self):
+        for malo in ("", "abc", "0", "-1", "4.5", "1e2"):
+            with self.subTest(valor=malo):
+                s = _ajustes(otp_ip_rate_limit_max=malo, otp_ip_daily_max=malo)
+                self.assertEqual((s.otp_ip_rate_limit_max, s.otp_ip_daily_max), (10, 150))
+
+    def test_el_maximo_aplica_solo_si_se_pasa_a_la_funcion(self):
+        self.assertEqual(entero_positivo_o_defecto("1000", 7), 1000)           # sin maximo: se respeta
+        self.assertEqual(entero_positivo_o_defecto("1000", 7, 100), 7)         # con maximo: defecto
+        self.assertEqual(entero_positivo_o_defecto("100", 7, 100), 100)        # el propio maximo es valido
+
     def test_las_dos_variables_son_independientes(self):
         s = _ajustes(otp_ip_rate_limit_max="40", otp_ip_daily_max="abc")
         self.assertEqual((s.otp_ip_rate_limit_max, s.otp_ip_daily_max), (40, 150))
@@ -116,6 +156,20 @@ class PruebasLimiteDeIpConfigurable(BaseHttp):
         self.assertEqual(codigos[40:], [429, 429])
         r = self.pedir(99)
         self.assertIn("Demasiadas solicitudes de OTP desde esta IP", r.json()["detail"])
+
+    def test_variable_en_el_maximo_100_las_100_pasan_y_la_101_es_429(self):
+        self.limites(ip_max=_ajustes(otp_ip_rate_limit_max="100").otp_ip_rate_limit_max, diario=500)
+        codigos = [self.pedir(n).status_code for n in range(102)]
+        self.assertEqual(codigos[:100], [200] * 100)
+        self.assertEqual(codigos[100:], [429, 429])
+
+    def test_variable_por_encima_del_maximo_cae_a_10_no_a_100(self):
+        for demasiado in ("101", "4000"):
+            with self.subTest(valor=demasiado):
+                self.redis_call(self.redis.flushall)
+                with patch.object(settings, "otp_ip_rate_limit_max", _ajustes(otp_ip_rate_limit_max=demasiado).otp_ip_rate_limit_max):
+                    codigos = [self.pedir(n).status_code for n in range(12)]
+                self.assertEqual(codigos, [200] * 10 + [429, 429], demasiado)
 
     def test_valor_invalido_en_el_entorno_cae_a_10_nunca_desactiva_el_limite(self):
         for malo in ("", "abc", "0", "-3"):
@@ -195,6 +249,12 @@ class PruebasTopeDiarioPorIp(BaseHttp):
             await asyncio.sleep(0.15)
         self.redis_call(vencer)
         self.assertEqual(self.pedir(4).status_code, 200)
+
+    def test_tope_diario_por_encima_de_500_cae_al_defecto_150(self):
+        self.limites(ip_max=10000, diario=_ajustes(otp_ip_daily_max="501").otp_ip_daily_max)  # ventana de 15 min holgada: aqui solo importa el tope diario
+        codigos = [self.pedir(n).status_code for n in range(152)]
+        self.assertEqual(codigos[:150], [200] * 150)
+        self.assertEqual(codigos[150:], [429, 429])   # 150, no 500
 
     def test_el_defecto_de_150_por_dia_no_molesta_con_las_40_de_una_demo(self):
         self.limites(ip_max=40, diario=_ajustes().otp_ip_daily_max)
