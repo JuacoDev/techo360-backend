@@ -25,11 +25,13 @@ class ActualizarFeedbackRequest(BaseModel):
 
 
 class CrearMensajeRequest(BaseModel):
-    # Literal en vez de str -- valida en la API (422 claro) en vez de
-    # dejar que el CHECK constraint de BD lo rechace como 500 (ver
-    # AVISO en models/mensaje.py sobre por que no se repite como Enum
-    # alla: aqui es validacion de entrada, no redefinicion del schema).
-    rol: Literal["usuario", "asistente"]
+    # SEGURIDAD: el cliente solo puede escribir mensajes de rol "usuario". Antes
+    # admitia "asistente", lo que permitia falsificar respuestas del bot en la
+    # propia conversacion (y meterlas en el dataset si hay consentimiento). Las
+    # respuestas del asistente las escribe SOLO el servidor (enviar/reintentar).
+    # Literal -> 422 claro si llega otro valor; por defecto "usuario" para los
+    # clientes que no lo mandan.
+    rol: Literal["usuario"] = "usuario"
     contenido: str
 
 

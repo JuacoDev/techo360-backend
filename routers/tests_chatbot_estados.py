@@ -6,6 +6,7 @@ interruptor, codigos HTTP, cuerpos de error, y que la ruta de siempre no cambia.
 Uso:
     python -m routers.tests_chatbot_estados
 """
+import json
 import unittest
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -183,9 +184,15 @@ class Base(unittest.TestCase):
                 return self.respuesta_asistente()
             return self.respuesta_asistente
 
+        self.avisos = []  # avisos de cancelacion publicados: (mensaje_id, intento)
+
+        async def aviso_falso(mensaje_id, intento):
+            self.avisos.append((mensaje_id, intento))
+
         for p in (
             patch.object(router_chatbot, "chatbot_estados", self.estados),
             patch.object(router_chatbot, "solicitar_chatbot", rpc_falso),
+            patch.object(router_chatbot, "avisar_cancelacion", aviso_falso),
         ):
             p.start()
             self.addCleanup(p.stop)
@@ -343,6 +350,123 @@ class TestReintentar(Base):
         r2 = self.cliente.post("/chatbot/mensajes/5/reintentar")
         self.assertEqual(r2.status_code, 409)
         self.assertEqual(len(self.llamadas_rpc), 1)
+
+
+class TestAvisoDeCancelacion(Base):
+    """Cancelar un mensaje en vuelo avisa al worker (opcional, mejor esfuerzo) para que deje de
+    generar; la cancelacion en BD y el 409 del RPC descartado no cambian."""
+
+    def test_el_payload_del_rpc_lleva_mensaje_e_intento_y_conserva_los_campos_de_siempre(self):
+        self.interruptor(True)
+        self.enviar()
+        payload = self.llamadas_rpc[0]
+        mensaje = next(iter(self.estados.mensajes.values()))
+        self.assertEqual((payload["mensaje_id"], payload["intento"]), (mensaje.id, 1))
+        for campo in ("mensaje", "usuario_id", "consentimiento_entrenamiento", "conversacion_id"):
+            self.assertIn(campo, payload)  # un chatbot con imagen vieja solo lee estos
+
+    def test_cancelar_en_vuelo_avisa_con_el_intento_vigente(self):
+        self.estados.poner(_msg(5, "usuario", "procesando", intentos=2))
+        r = self.cliente.post("/chatbot/mensajes/5/cancelar")
+        self.assertEqual((r.status_code, r.json()["estado"]), (200, "cancelado"))
+        self.assertEqual(self.avisos, [(5, 2)])
+
+    def test_cancelar_y_reintentar_cambia_de_intento_y_el_aviso_apunta_al_viejo(self):
+        self.interruptor(True)
+        self.estados.poner(_msg(5, "usuario", "procesando", intentos=1))
+        self.cliente.post("/chatbot/mensajes/5/cancelar")
+        self.cliente.post("/chatbot/mensajes/5/reintentar")
+        self.assertEqual(self.avisos, [(5, 1)])  # solo el intento 1 queda cancelado
+        self.assertEqual((self.llamadas_rpc[0]["mensaje_id"], self.llamadas_rpc[0]["intento"]), (5, 2))  # el reintento es otro intento
+
+    def test_sin_aviso_si_ya_estaba_cancelado_o_respondido_o_no_existe(self):
+        self.estados.poner(_msg(5, "usuario", "cancelado"))
+        self.cliente.post("/chatbot/mensajes/5/cancelar")
+        self.estados.mensajes.clear()
+        self.estados.poner(_msg(5, "usuario", "respondido"))
+        self.cliente.post("/chatbot/mensajes/5/cancelar")
+        self.cliente.post("/chatbot/mensajes/999/cancelar")
+        self.assertEqual(self.avisos, [])
+
+    def test_interruptor_apagado_no_avisa_pero_cancela(self):
+        p = patch.object(router_chatbot.settings, "chatbot_avisar_cancelacion", False)
+        p.start()
+        self.addCleanup(p.stop)
+        self.estados.poner(_msg(5, "usuario", "procesando", intentos=1))
+        r = self.cliente.post("/chatbot/mensajes/5/cancelar")
+        self.assertEqual(r.json()["estado"], "cancelado")
+        self.assertEqual(self.avisos, [])
+
+    def test_por_defecto_esta_encendido(self):
+        self.assertIs(Settings.model_fields["chatbot_avisar_cancelacion"].default, True)
+
+
+class TestPublicarAviso(unittest.TestCase):
+    def test_publica_en_el_exchange_fanout_con_ttl_y_nunca_lanza(self):
+        from services import chatbot_rpc_client as rpc
+
+        publicados = []
+
+        class Exchange:
+            async def publish(self, mensaje, routing_key=""):
+                publicados.append((mensaje, routing_key))
+
+        class Canal:
+            async def declare_exchange(self, nombre, tipo, durable=True):
+                publicados.append(("exchange", nombre, tipo, durable))
+                return Exchange()
+
+            async def close(self):
+                publicados.append("cerrado")
+
+        class Conexion:
+            async def channel(self):
+                return Canal()
+
+        async def conexion_falsa():
+            return Conexion()
+
+        with patch.object(rpc, "_get_connection", conexion_falsa):
+            asyncio.run(rpc.avisar_cancelacion(5, 2))
+        self.assertEqual(publicados[0][:2], ("exchange", "chatbot_cancelaciones"))
+        self.assertFalse(publicados[0][3])  # no durable
+        mensaje, clave = publicados[1]
+        self.assertEqual(json.loads(mensaje.body), {"mensaje_id": 5, "intento": 2})
+        self.assertEqual(clave, "")
+        self.assertEqual(mensaje.expiration, rpc.TTL_AVISO_CANCELACION_S)
+        self.assertEqual(publicados[-1], "cerrado")
+
+        async def conexion_rota():
+            raise ConnectionError("sin rabbitmq")
+
+        with patch.object(rpc, "_get_connection", conexion_rota):
+            asyncio.run(rpc.avisar_cancelacion(5, 2))  # no lanza
+
+    def test_exchange_ausente_o_sin_permiso_no_rompe_el_aviso(self):
+        """Si declarar el exchange falla (permisos, canal cerrado...), avisar_cancelacion no lanza y
+        cierra el canal: cancelar ya se hizo en la BD y es lo que importa."""
+        from services import chatbot_rpc_client as rpc
+
+        eventos = []
+
+        class Canal:
+            async def declare_exchange(self, *args, **kwargs):
+                raise RuntimeError("ACCESS_REFUSED o NOT_FOUND")
+
+            async def close(self):
+                eventos.append("cerrado")
+
+        class Conexion:
+            async def channel(self):
+                return Canal()
+
+        async def conexion_falsa():
+            return Conexion()
+
+        with patch.object(rpc, "_get_connection", conexion_falsa):
+            with self.assertLogs(rpc.logger, level="WARNING"):
+                asyncio.run(rpc.avisar_cancelacion(5, 2))
+        self.assertEqual(eventos, ["cerrado"])
 
 
 class TestCancelarYEliminar(Base):

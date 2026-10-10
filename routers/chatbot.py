@@ -1,6 +1,6 @@
 import asyncio
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Response
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
@@ -23,7 +23,7 @@ from schemas.chatbot import (
     MensajeResponse,
 )
 from services import chatbot_estados, chatbot_service
-from services.chatbot_rpc_client import ChatbotTimeoutError, solicitar_chatbot
+from services.chatbot_rpc_client import ChatbotTimeoutError, avisar_cancelacion, solicitar_chatbot
 
 router = APIRouter(
     prefix="/chatbot",
@@ -93,6 +93,7 @@ def listar_conversaciones(
     responses={
         401: {"description": "Requiere sesión iniciada."},
         404: {"description": "La conversacion no existe o no pertenece al usuario autenticado."},
+        422: {"description": "rol distinto de 'usuario' (las respuestas del asistente las escribe solo el servidor)."},
     },
 )
 def crear_mensaje(
@@ -109,7 +110,8 @@ def crear_mensaje(
     if conversacion is None:
         raise HTTPException(status_code=404, detail="Conversacion no encontrada.")
 
-    return chatbot_service.agregar_mensaje(db, conversacion_id, datos.rol, datos.contenido)
+    # SEGURIDAD: rol fijo del servidor, nunca el del cuerpo (el esquema ya rechaza "asistente").
+    return chatbot_service.agregar_mensaje(db, conversacion_id, "usuario", datos.contenido)
 
 
 @router.get(
@@ -301,6 +303,10 @@ async def _procesar(
         "usuario_id": current_user.id,
         "consentimiento_entrenamiento": conversacion.consentimiento_entrenamiento,
         "conversacion_id": conversacion.id,
+        # Opcionales (un chatbot con imagen vieja los ignora): permiten que el worker
+        # reconozca el aviso de cancelacion de ESTE intento (ver avisar_cancelacion).
+        "mensaje_id": mensaje_id,
+        "intento": intento,
     }
     db.rollback()
     db_usuarios.rollback()
@@ -421,11 +427,16 @@ async def reintentar_mensaje(
 )
 def cancelar_mensaje(
     mensaje_id: int,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db_vector),
     current_user: MapCalorUser = Depends(get_current_user),
 ):
     mensaje = chatbot_estados.cancelar(db, mensaje_id, current_user.id)
     if mensaje is not None:
+        if settings.chatbot_avisar_cancelacion:
+            # Despues de responder: el usuario no espera a RabbitMQ. `intentos` es el intento
+            # que estaba en vuelo (el que se acaba de cancelar).
+            background_tasks.add_task(avisar_cancelacion, mensaje.id, mensaje.intentos)
         return mensaje
     existente = chatbot_estados.obtener_de_usuario(db, mensaje_id, current_user.id)
     if existente is None or existente.rol != "usuario":

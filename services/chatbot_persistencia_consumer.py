@@ -1,11 +1,13 @@
 import json
 import logging
+from collections import Counter
+from dataclasses import dataclass
 
 import aio_pika
 from aio_pika.abc import AbstractChannel, AbstractIncomingMessage, AbstractRobustConnection
 
 from db.session_vector import SessionLocalVector
-from services.chatbot_service import agregar_mensaje, crear_conversacion
+from services.chatbot_service import agregar_mensaje, conversacion_de_usuario, crear_conversacion
 
 logger = logging.getLogger(__name__)
 
@@ -28,28 +30,82 @@ logger = logging.getLogger(__name__)
 # pruebas locales sin RabbitMQ real de por medio) todavia publica aqui.
 EVENTOS_QUEUE = "chatbot_eventos_persistencia"
 
+# SEGURIDAD: este evento lo publicaba POST /chatbot/send de techo360-chatbot, que
+# estaba expuesto sin sesion y ponia en el cuerpo usuario_id y conversacion_id a
+# gusto de quien llamaba; ademas RabbitMQ es alcanzable por Tailscale desde el pool
+# de workers. Por eso este consumer NO confia en el evento: valida su forma y
+# comprueba que la conversacion sea de usuario_id ANTES de escribir. Lo que no pasa
+# se descarta (ack, sin reintento: reintentar un evento malo no lo arregla), se
+# registra SIN el contenido de los mensajes y se cuenta por motivo.
+LARGO_MAXIMO_TEXTO = 20000
+DESCARTADOS: Counter = Counter()  # motivo -> eventos descartados desde que arranco el proceso
+
+
+class EventoInvalido(ValueError):
+    def __init__(self, motivo: str):
+        super().__init__(motivo)
+        self.motivo = motivo
+
+
+@dataclass(frozen=True)
+class EventoIntercambio:
+    usuario_id: int
+    consentimiento_entrenamiento: bool
+    mensaje_usuario: str
+    respuesta_asistente: str
+    conversacion_id: int | None
+
+
+def _es_entero(valor) -> bool:
+    return isinstance(valor, int) and not isinstance(valor, bool)
+
+
+def validar_evento(payload) -> EventoIntercambio:
+    """Forma exacta del evento "intercambio_completo"; EventoInvalido(motivo) si no."""
+    if not isinstance(payload, dict):
+        raise EventoInvalido("no_es_objeto")
+    if payload.get("tipo") != "intercambio_completo":
+        raise EventoInvalido("tipo_desconocido")
+    usuario_id = payload.get("usuario_id")
+    if not _es_entero(usuario_id) or usuario_id <= 0:
+        raise EventoInvalido("usuario_id_invalido")
+    if not isinstance(payload.get("consentimiento_entrenamiento"), bool):
+        raise EventoInvalido("consentimiento_invalido")
+    for campo in ("mensaje_usuario", "respuesta_asistente"):
+        texto = payload.get(campo)
+        if not isinstance(texto, str) or not texto.strip() or len(texto) > LARGO_MAXIMO_TEXTO:
+            raise EventoInvalido(f"{campo}_invalido")
+    # Opcional: sin conversacion_id se crea una nueva (comportamiento anterior); si
+    # viene, se reutiliza SOLO si es de usuario_id (se comprueba en _procesar_evento).
+    conversacion_id = payload.get("conversacion_id")
+    if conversacion_id is not None and (not _es_entero(conversacion_id) or conversacion_id <= 0):
+        raise EventoInvalido("conversacion_id_invalido")
+    return EventoIntercambio(
+        usuario_id=usuario_id,
+        consentimiento_entrenamiento=payload["consentimiento_entrenamiento"],
+        mensaje_usuario=payload["mensaje_usuario"],
+        respuesta_asistente=payload["respuesta_asistente"],
+        conversacion_id=conversacion_id,
+    )
+
+
+def _descartar(motivo: str, **ids) -> None:
+    DESCARTADOS[motivo] += 1
+    detalle = " ".join(f"{k}={v}" for k, v in ids.items())
+    logger.warning(
+        "Evento de '%s' descartado (%s) %s total_motivo=%d", EVENTOS_QUEUE, motivo, detalle, DESCARTADOS[motivo]
+    )
+
 
 async def _procesar_evento(message: AbstractIncomingMessage) -> None:
     async with message.process():
         try:
-            payload = json.loads(message.body)
-            tipo = payload.get("tipo")
-            if tipo != "intercambio_completo":
-                logger.warning("Tipo de evento de persistencia desconocido: %s", tipo)
-                return
-
-            usuario_id = payload["usuario_id"]
-            consentimiento_entrenamiento = payload["consentimiento_entrenamiento"]
-            mensaje_usuario = payload["mensaje_usuario"]
-            respuesta_asistente = payload["respuesta_asistente"]
-            # Opcional -- POST /chatbot/send de techo360-chatbot (unico
-            # publicador que queda de este evento) no siempre tiene una
-            # conversacion ya creada. Si no viene, se crea una nueva
-            # (comportamiento anterior); si viene, se reutiliza en vez
-            # de crear otra fila en conversaciones por cada mensaje.
-            conversacion_id = payload.get("conversacion_id")
-        except (KeyError, json.JSONDecodeError):
-            logger.exception("Evento de persistencia con payload invalido, se descarta")
+            evento = validar_evento(json.loads(message.body))
+        except json.JSONDecodeError:
+            _descartar("json_invalido")
+            return
+        except EventoInvalido as error:
+            _descartar(error.motivo)
             return
 
         # Mismo criterio "best effort" que ya documentaba
@@ -61,10 +117,15 @@ async def _procesar_evento(message: AbstractIncomingMessage) -> None:
         # persistencia.
         db = SessionLocalVector()
         try:
+            conversacion_id = evento.conversacion_id
             if conversacion_id is None:
-                conversacion_id = crear_conversacion(db, usuario_id, consentimiento_entrenamiento).id
-            agregar_mensaje(db, conversacion_id, "usuario", mensaje_usuario)
-            agregar_mensaje(db, conversacion_id, "asistente", respuesta_asistente)
+                conversacion_id = crear_conversacion(db, evento.usuario_id, evento.consentimiento_entrenamiento).id
+            elif conversacion_de_usuario(db, conversacion_id, evento.usuario_id) is None:
+                # Inexistente o de otro usuario: misma respuesta para no revelar cual.
+                _descartar("conversacion_ajena_o_inexistente", usuario_id=evento.usuario_id, conversacion_id=conversacion_id)
+                return
+            agregar_mensaje(db, conversacion_id, "usuario", evento.mensaje_usuario)
+            agregar_mensaje(db, conversacion_id, "asistente", evento.respuesta_asistente)
         except Exception:
             logger.exception("No se pudo persistir el intercambio recibido de '%s'", EVENTOS_QUEUE)
         finally:

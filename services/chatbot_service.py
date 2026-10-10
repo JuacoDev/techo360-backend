@@ -21,6 +21,18 @@ def crear_conversacion(db: Session, usuario_id: int, consentimiento_entrenamient
     return conversacion
 
 
+def conversacion_de_usuario(db: Session, conversacion_id: int, usuario_id: int) -> Conversacion | None:
+    """La conversacion SOLO si existe y es de usuario_id (None si no existe o es ajena).
+
+    SEGURIDAD: punto unico de verificacion de propiedad para los caminos que no
+    pasan por get_current_user (el consumer de RabbitMQ)."""
+    return (
+        db.query(Conversacion)
+        .filter(Conversacion.id == conversacion_id, Conversacion.usuario_id == usuario_id)
+        .first()
+    )
+
+
 def agregar_mensaje(db: Session, conversacion_id: int, rol: str, contenido: str) -> Mensaje:
     mensaje = Mensaje(conversacion_id=conversacion_id, rol=rol, contenido=contenido)
     db.add(mensaje)
