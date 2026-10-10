@@ -25,7 +25,8 @@ from services.otp_service import (
     otp_service,
 )
 from core.config import ACCESS_TOKEN_EXPIRE_HOURS, settings
-
+from fastapi import Request
+from services.rate_limiter import obtener_ip_cliente, verificar_limite
 
 router = APIRouter(
     prefix="/auth",
@@ -35,6 +36,16 @@ router = APIRouter(
 # Configuración de OAuth2
 # -------------------
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
+
+
+async def limitar_login(request: Request):
+    await verificar_limite(
+        request=request,
+        ambito="auth_login",
+        identificador=obtener_ip_cliente(request),
+        limite=5,
+        ventana_segundos=900,
+    )
 
 # -------------------
 # Crear token JWT
@@ -55,6 +66,7 @@ def crear_access_token(user_id: int, correo: str, name: str) -> str:
 # -------------------
 @router.post(
     "/login",
+    dependencies=[Depends(limitar_login)],
     summary="Iniciar sesión",
     description="Autentica un usuario mediante su identificador y contraseña y devuelve un token JWT.",
     response_model=LoginResponse,
