@@ -13,7 +13,7 @@ import string
 
 import redis.asyncio as aioredis
 
-from core.config import settings
+from core.config import OTP_IP_DAILY_MAX_DEFECTO, OTP_IP_RATE_LIMIT_MAX_DEFECTO, settings
 from services.email_service import email_service
 
 logger = logging.getLogger(__name__)
@@ -27,13 +27,21 @@ RESEND_COOLDOWN_SECONDS = 60       # no permitir reenviar antes de 60s
 # para muchos correos distintos (o el mismo, cada 60s sostenido) y agote
 # el cupo diario COMPARTIDO de Brevo (300/dia, ver email_service.py) antes
 # que nadie mas pueda recibir un correo real. Limite adicional por IP:
-# 10 solicitudes cada 15 minutos es generoso para un usuario legitimo
-# (pedir + reintentar un par de veces si no le llego o se equivoco no
-# se acerca a 10), pero acota el peor caso de una sola IP a 40/hora --
-# muy por debajo del cupo diario compartido, sin necesitar autenticacion
-# (este endpoint es pre-login a proposito).
-IP_RATE_LIMIT_MAX = 10
+# 10 solicitudes cada 15 minutos (por defecto) es generoso para un usuario
+# legitimo (pedir + reintentar un par de veces si no le llego o se equivoco
+# no se acerca a 10) y acota el peor caso de una sola IP a 40/hora, sin
+# necesitar autenticacion (este endpoint es pre-login a proposito).
+#
+# El tope se lee de la configuracion (OTP_IP_RATE_LIMIT_MAX, por defecto 10;
+# vacio, no numerico o <= 0 cae a 10 -- nunca desactiva el limite): la red de
+# la universidad sale por UNA sola IP, asi que una demo con registro en vivo
+# puede necesitar subirlo (con 40 el peor caso de una IP pasa a 160/hora, que
+# agotaria el cupo diario de Brevo en menos de 2 h: por eso hay ademas un tope
+# DIARIO por IP, OTP_IP_DAILY_MAX, por defecto 150 = la mitad del cupo).
+IP_RATE_LIMIT_MAX = OTP_IP_RATE_LIMIT_MAX_DEFECTO   # valor por defecto; el vigente es settings.otp_ip_rate_limit_max
 IP_RATE_LIMIT_WINDOW_SECONDS = 15 * 60
+IP_DAILY_LIMIT_MAX = OTP_IP_DAILY_MAX_DEFECTO       # valor por defecto; el vigente es settings.otp_ip_daily_max
+IP_DAILY_WINDOW_SECONDS = 24 * 60 * 60
 
 # Tope por CORREO: el cooldown de 60 s por si solo permite 60 codigos por hora al mismo
 # destinatario (alguien podria usar el servicio para llenarle la bandeja a una victima
@@ -73,6 +81,17 @@ class OTPEmailLimitError(Exception):
         super().__init__(
             f"Ya se solicitaron {EMAIL_RATE_LIMIT_MAX} codigos para este correo en la ultima hora. "
             f"Intenta de nuevo en {minutos} min."
+        )
+
+
+class OTPIpDailyLimitError(Exception):
+    """Se supero el tope DIARIO de solicitudes de OTP desde esta IP."""
+
+    def __init__(self, seconds_remaining: int):
+        self.seconds_remaining = seconds_remaining
+        horas = max(1, -(-seconds_remaining // 3600))
+        super().__init__(
+            f"Se alcanzo el limite diario de codigos solicitados desde esta IP. Intenta de nuevo en {horas} h."
         )
 
 
@@ -122,6 +141,9 @@ class OTPService:
     def _ip_rate_limit_key(self, ip: str) -> str:
         return f"otp:ip_limit:{ip}"
 
+    def _ip_daily_key(self, ip: str) -> str:
+        return f"otp:ip_daily:{ip}"
+
     @staticmethod
     def _normalizar(email: str) -> str:
         return email.strip().lower()
@@ -144,9 +166,21 @@ class OTPService:
         if count == 1:
             await self._redis.expire(key, IP_RATE_LIMIT_WINDOW_SECONDS)
 
-        if count > IP_RATE_LIMIT_MAX:
+        if count > settings.otp_ip_rate_limit_max:
             ttl_remaining = await self._redis.ttl(key)
             raise OTPRateLimitError(ttl_remaining if ttl_remaining > 0 else IP_RATE_LIMIT_WINDOW_SECONDS)
+
+        # Tope diario: solo cuentan las solicitudes que pasaron el limite de 15 min (las rechazadas
+        # arriba no lo gastan). Ventana fija desde la primera del dia; una clave sin TTL (caida entre
+        # INCR y EXPIRE) se repara para que nunca bloquee para siempre.
+        dkey = self._ip_daily_key(ip)
+        dcount = await self._redis.incr(dkey)
+        dttl = await self._redis.ttl(dkey)
+        if dcount == 1 or dttl == -1:
+            await self._redis.expire(dkey, IP_DAILY_WINDOW_SECONDS)
+            dttl = IP_DAILY_WINDOW_SECONDS
+        if dcount > settings.otp_ip_daily_max:
+            raise OTPIpDailyLimitError(dttl if dttl > 0 else IP_DAILY_WINDOW_SECONDS)
 
     async def _check_email_rate_limit(self, email: str) -> None:
         """INCR + EXPIRE en el primer hit (ventana fija, como el limite por IP). Si la clave

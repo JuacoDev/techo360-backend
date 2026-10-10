@@ -7,6 +7,7 @@ from services.otp_service import (
     OTPCooldownError,
     OTPEmailLimitError,
     OTPInvalidError,
+    OTPIpDailyLimitError,
     OTPRateLimitError,
     OTPTooManyAttemptsError,
     otp_service,
@@ -76,8 +77,8 @@ class OTPResponse(BaseModel):
         429: {
             "description": (
                 "Debe esperar antes de solicitar otro código OTP, superó el "
-                "límite de solicitudes desde su IP en la ventana actual, o ya se "
-                "pidieron 5 códigos para ese correo en la última hora."
+                "límite de solicitudes desde su IP en la ventana actual (o su tope "
+                "diario), o ya se pidieron 5 códigos para ese correo en la última hora."
             )
         }
     }
@@ -103,6 +104,12 @@ async def request_otp(payload: RequestOTPRequest, request: Request):
         )
 
     except OTPEmailLimitError as e:
+        raise HTTPException(
+            status_code=429,
+            detail=str(e)
+        )
+
+    except OTPIpDailyLimitError as e:
         raise HTTPException(
             status_code=429,
             detail=str(e)

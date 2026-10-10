@@ -18,6 +18,7 @@ from starlette.requests import Request
 
 from routers import otp as router_otp
 from services import otp_service as modulo_otp
+from core.config import settings
 from services.otp_service import IP_RATE_LIMIT_MAX, otp_service
 
 
@@ -60,6 +61,7 @@ class PruebasLimitePorIp(unittest.TestCase):
         redis = fake_aioredis.FakeRedis(server=fakeredis.FakeServer(), decode_responses=True)
         for parche in (
             patch.object(otp_service, "_redis", redis),
+            patch.object(settings, "otp_ip_rate_limit_max", IP_RATE_LIMIT_MAX),  # no depender de OTP_IP_RATE_LIMIT_MAX del entorno
             patch.object(modulo_otp.email_service, "send_otp", AsyncMock()),
         ):
             parche.start()

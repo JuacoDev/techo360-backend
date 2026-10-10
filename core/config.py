@@ -1,3 +1,4 @@
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Duracion del token de acceso (JWT). Valor UNICO: lo usan routers/auth.py y
@@ -6,6 +7,24 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # Los tokens ya emitidos conservan su caducidad original; solo los nuevos
 # duran esto.
 ACCESS_TOKEN_EXPIRE_HOURS = 8
+
+# Limites por IP de /otp/request (ver services/otp_service.py). Los valores por defecto son los de
+# produccion; se pueden subir con OTP_IP_RATE_LIMIT_MAX / OTP_IP_DAILY_MAX en el .env (p. ej. una
+# demo con registro en vivo desde la red de la universidad, que comparte una sola IP).
+OTP_IP_RATE_LIMIT_MAX_DEFECTO = 10   # solicitudes por IP cada 15 minutos
+OTP_IP_DAILY_MAX_DEFECTO = 150       # solicitudes por IP cada 24 horas
+
+
+def entero_positivo_o_defecto(valor, defecto: int) -> int:
+    """Entero > 0 leido de una variable de entorno. Vacio, no numerico ("abc", "4.5"), cero o
+    negativo -> `defecto`: un valor mal escrito NUNCA desactiva un limite de seguridad."""
+    if isinstance(valor, bool):
+        return defecto
+    try:
+        n = int(str(valor).strip())
+    except (TypeError, ValueError):
+        return defecto
+    return n if n > 0 else defecto
 
 
 class Settings(BaseSettings):
@@ -76,6 +95,11 @@ class Settings(BaseSettings):
     chatbot_max_en_proceso_por_usuario: int = 2
     chatbot_max_cola: int = 10
 
+    # /otp/request: tope por IP en la ventana de 15 min y por dia (ver services/otp_service.py). Variables
+    # OTP_IP_RATE_LIMIT_MAX y OTP_IP_DAILY_MAX; vacio, no numerico o <= 0 -> el valor por defecto.
+    otp_ip_rate_limit_max: int = OTP_IP_RATE_LIMIT_MAX_DEFECTO
+    otp_ip_daily_max: int = OTP_IP_DAILY_MAX_DEFECTO
+
     # Modo local (DESACTIVAR_TAREAS_DE_FONDO=1 en el .env): el evento startup no arranca NADA de
     # lo que toca recursos compartidos -- scheduler de ingesta, ALTER TABLE de reportes, consumers
     # de RabbitMQ (persistencia del chatbot y reportes), barrido de mensajes huerfanos ni el
@@ -83,6 +107,16 @@ class Settings(BaseSettings):
     # a servicios reales sin competir con el backend de produccion. Sin la variable (False) todo
     # arranca como siempre. En produccion NO debe definirse.
     desactivar_tareas_de_fondo: bool = False
+
+    @field_validator("otp_ip_rate_limit_max", mode="before")
+    @classmethod
+    def _otp_ip_rate_limit_max_valido(cls, valor):
+        return entero_positivo_o_defecto(valor, OTP_IP_RATE_LIMIT_MAX_DEFECTO)
+
+    @field_validator("otp_ip_daily_max", mode="before")
+    @classmethod
+    def _otp_ip_daily_max_valido(cls, valor):
+        return entero_positivo_o_defecto(valor, OTP_IP_DAILY_MAX_DEFECTO)
 
     # JWT
     jwt_secret_key: str
