@@ -64,6 +64,11 @@ Resumen de la corrida: 6 fuentes OK, 0 registros rechazados, 0 advertencias, 1 b
 Reintentar con la cola ocupada y el posible 504 de nginx (ver el README del frontend); el reencolado de un mensaje en vuelo al recrear el chatbot; los proxies fuera del VPS.
 
 
+## Modo local: `DESACTIVAR_TAREAS_DE_FONDO=1`
+Al arrancar, el backend lanza tareas que tocan recursos compartidos: el scheduler de ingesta (lunes 03:00 en la hora del reloj de la máquina; trimestral de zonas; precalentamiento diario 03:30), el `ALTER TABLE` de `public.reportes`, los consumers de RabbitMQ (`chatbot_eventos_persistencia`, prefetch 4, y `reportes_generacion`, prefetch 2), el barrido de mensajes `pendiente`/`procesando` a `error` y el precalentamiento de cachés. En una máquina de desarrollo apuntando a servicios reales, eso compite con el backend de producción (se llevaría eventos y trabajos de reportes, y reiniciar con `--reload` volvería a barrer mensajes).
+
+Con `DESACTIVAR_TAREAS_DE_FONDO=1` en el `.env` local, el evento `startup` imprime `[main] modo local: tareas de fondo desactivadas` y **no arranca nada de lo anterior**; la API sigue sirviendo peticiones. Sin la variable el comportamiento es el de siempre. **No debe definirse en producción.** Límites: no impide conectarse a RabbitMQ, a las bases ni a Redis al atender peticiones. Con las tareas apagadas, `POST /api/reportes/generar` responde 503 (no hay canal de reportes y no publica), pero el chat sí abre conexión y publica en `chatbot_requests` de la RabbitMQ a la que apunte `RABBITMQ_URL`. Para aislarse del todo, usar un RabbitMQ y bases propios. Pruebas: `python -m routers.tests_tareas_de_fondo`.
+
 ## Reportes asíncronos (8-oct-2026)
 
 La tabla `public.reportes` se creó a mano en `postgres-principal` (base `techo360_principal`) antes del deploy: `preparar_esquema_reportes` solo hace `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` y falla al arrancar si la tabla no existe. El DDL fue `CREATE TABLE IF NOT EXISTS` con las columnas de `models/reporte.py` más `estado`, `formato`, `solicitud`, `archivo_nombre` y `error`, y el índice `ix_reportes_usuario_id`. Cola nueva: `reportes_generacion` (la publica y la consume el backend).

@@ -46,6 +46,13 @@ app.include_router(reportes.router)
 
 @app.on_event("startup")
 async def iniciar_pipeline_datos():
+    # Modo local: nada de tareas de fondo (ver core/config.py, desactivar_tareas_de_fondo).
+    # Todo lo de abajo -- scheduler, esquema de reportes, consumers, barrido y precalentamiento --
+    # se omite; el shutdown ya tolera que app.state no tenga las conexiones.
+    if settings.desactivar_tareas_de_fondo:
+        print("[main] modo local: tareas de fondo desactivadas")
+        return
+
     # Capturar el event loop AQUI, mientras estamos corriendo en el (startup
     # es async). notificar_admin se llama despues desde un hilo worker aparte
     # (el pipeline corre via asyncio.to_thread dentro del scheduler, para no

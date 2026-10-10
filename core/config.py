@@ -65,6 +65,14 @@ class Settings(BaseSettings):
     # (CHATBOT_AVISAR_CANCELACION=false en el .env), sin tocar nada mas.
     chatbot_avisar_cancelacion: bool = True
 
+    # Modo local (DESACTIVAR_TAREAS_DE_FONDO=1 en el .env): el evento startup no arranca NADA de
+    # lo que toca recursos compartidos -- scheduler de ingesta, ALTER TABLE de reportes, consumers
+    # de RabbitMQ (persistencia del chatbot y reportes), barrido de mensajes huerfanos ni el
+    # precalentamiento de caches. Sirve para correr la API en una maquina de desarrollo apuntando
+    # a servicios reales sin competir con el backend de produccion. Sin la variable (False) todo
+    # arranca como siempre. En produccion NO debe definirse.
+    desactivar_tareas_de_fondo: bool = False
+
     # JWT
     jwt_secret_key: str
 
