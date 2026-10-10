@@ -38,6 +38,9 @@ RESPONDIDO = "respondido"
 ESTADOS = (PENDIENTE, PROCESANDO, ERROR, CANCELADO, RESPONDIDO)
 SIN_RESOLVER = (PENDIENTE, PROCESANDO, ERROR, CANCELADO)
 
+# Los que de verdad esperan al asistente (error/cancelado ya no ocupan lugar en la cola).
+EN_PROCESO = (PENDIENTE, PROCESANDO)
+
 # Nombre del indice unico parcial de la migracion 0002: es el UNICO IntegrityError que
 # significa "la conversacion ya tiene un mensaje sin resolver".
 INDICE_UNICO_SIN_RESOLVER = "uq_mensajes_un_sin_resolver_por_conversacion"
@@ -62,9 +65,31 @@ class ConversacionBloqueada(Exception):
         self.mensaje_pendiente = mensaje_pendiente
 
 
+class CapacidadAgotada(Exception):
+    """No se admite otro mensaje: el usuario ya tiene demasiados en proceso (motivo='usuario')
+    o la cola global del asistente esta llena (motivo='cola'). `limite` es el tope superado."""
+
+    def __init__(self, motivo: str, limite: int):
+        super().__init__(f"Capacidad agotada ({motivo}, limite {limite})")
+        self.motivo = motivo
+        self.limite = limite
+
+
 def _de_usuario(usuario_id: int):
     """Condicion: el mensaje pertenece a una conversacion del usuario."""
     return Mensaje.conversacion_id.in_(select(Conversacion.id).where(Conversacion.usuario_id == usuario_id))
+
+
+def verificar_capacidad(db: Session, usuario_id: int, max_por_usuario: int, max_cola: int) -> None:
+    """Lanza CapacidadAgotada si el usuario ya tiene `max_por_usuario` mensajes en proceso
+    ('usuario') o si en todo el sistema hay `max_cola` ('cola'). 0 desactiva el tope. Se llama
+    DESPUES de barrer_colgados (un colgado no debe contar). Es un limite blando: dos envios
+    simultaneos del mismo usuario pueden pasar a la vez por encima del tope en una unidad."""
+    base = select(func.count()).select_from(Mensaje).where(Mensaje.rol == "usuario", Mensaje.estado.in_(EN_PROCESO))
+    if max_por_usuario > 0 and (db.scalar(base.where(_de_usuario(usuario_id))) or 0) >= max_por_usuario:
+        raise CapacidadAgotada("usuario", max_por_usuario)
+    if max_cola > 0 and (db.scalar(base) or 0) >= max_cola:
+        raise CapacidadAgotada("cola", max_cola)
 
 
 def mensaje_sin_resolver(db: Session, conversacion_id: int) -> Mensaje | None:

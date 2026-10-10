@@ -65,6 +65,17 @@ class Settings(BaseSettings):
     # (CHATBOT_AVISAR_CANCELACION=false en el .env), sin tocar nada mas.
     chatbot_avisar_cancelacion: bool = True
 
+    # Admision de mensajes al asistente (solo con CHATBOT_BLOQUEO_PENDIENTES=true: usan los estados).
+    # Contados en la BD como mensajes de usuario en 'pendiente' o 'procesando' (los que de verdad
+    # esperan al asistente; 'error' y 'cancelado' no cuentan).
+    #  - por usuario: sin esto una cuenta abre N conversaciones y encola un mensaje en cada una.
+    #  - cola global: el asistente atiende pocos a la vez (2 consumidores, prefetch 1, ~20-45 s
+    #    cada uno) y el RPC del backend se rinde a los 200 s: con mas de ~10 esperando, los ultimos
+    #    ya no llegarian a tiempo. Se rechaza al entrar (503) en vez de encolar para fallar despues.
+    # 0 = sin limite. Se cambian con CHATBOT_MAX_EN_PROCESO_POR_USUARIO / CHATBOT_MAX_COLA en el .env.
+    chatbot_max_en_proceso_por_usuario: int = 2
+    chatbot_max_cola: int = 10
+
     # Modo local (DESACTIVAR_TAREAS_DE_FONDO=1 en el .env): el evento startup no arranca NADA de
     # lo que toca recursos compartidos -- scheduler de ingesta, ALTER TABLE de reportes, consumers
     # de RabbitMQ (persistencia del chatbot y reportes), barrido de mensajes huerfanos ni el
