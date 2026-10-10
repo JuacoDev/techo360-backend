@@ -35,6 +35,14 @@ RESEND_COOLDOWN_SECONDS = 60       # no permitir reenviar antes de 60s
 IP_RATE_LIMIT_MAX = 10
 IP_RATE_LIMIT_WINDOW_SECONDS = 15 * 60
 
+# Marca "correo verificado" (para /auth/register). /otp/verify la deja en Redis al
+# acertar el codigo y /auth/register la exige y la CONSUME (un registro por
+# verificacion). TTL corto: alcanza para que quien acaba de verificar termine el
+# registro (el frontend registra justo despues de verificar) y no deja una puerta
+# abierta. La "constancia de uso" distingue "ya se uso" de "expiro / nunca se verifico".
+VERIFIED_TTL_SECONDS = 10 * 60
+VERIFIED_USED_TTL_SECONDS = 10 * 60
+
 
 class OTPTooManyAttemptsError(Exception):
     """Se agotaron los intentos de verificacion para este codigo."""
@@ -51,6 +59,16 @@ class OTPRateLimitError(Exception):
 
 class OTPInvalidError(Exception):
     """El codigo no existe, expiro, o no coincide."""
+    pass
+
+
+class OTPNotVerifiedError(Exception):
+    """El correo no tiene una verificacion vigente (nunca se verifico, o la marca expiro)."""
+    pass
+
+
+class OTPVerificationUsedError(Exception):
+    """La verificacion de este correo ya se uso para un registro."""
     pass
 
 
@@ -77,6 +95,16 @@ class OTPService:
 
     def _ip_rate_limit_key(self, ip: str) -> str:
         return f"otp:ip_limit:{ip}"
+
+    @staticmethod
+    def _normalizar(email: str) -> str:
+        return email.strip().lower()
+
+    def _verified_key(self, email: str) -> str:
+        return f"otp:{self._normalizar(email)}:verified"
+
+    def _verified_used_key(self, email: str) -> str:
+        return f"otp:{self._normalizar(email)}:verified_used"
 
     def _generate_code(self) -> str:
         return "".join(random.choices(string.digits, k=OTP_LENGTH))
@@ -156,6 +184,37 @@ class OTPService:
         await self._redis.delete(attempts_key)
         logger.info(f"OTP verificado correctamente para {email}")
         return True
+
+    async def marcar_verificado(self, email: str) -> None:
+        """Deja la marca "correo verificado" (la pone SOLO /otp/verify, no verify_otp:
+        /auth/reset-password tambien usa verify_otp y no debe habilitar registros)."""
+        pipe = self._redis.pipeline()
+        pipe.set(self._verified_key(email), "1", ex=VERIFIED_TTL_SECONDS)
+        pipe.delete(self._verified_used_key(email))
+        await pipe.execute()
+
+    async def comprobar_verificado(self, email: str) -> None:
+        """No consume nada. Lanza OTPVerificationUsedError si la verificacion ya se uso,
+        u OTPNotVerifiedError si no hay marca (nunca se verifico o expiro)."""
+        if await self._redis.exists(self._verified_key(email)):
+            return
+        if await self._redis.exists(self._verified_used_key(email)):
+            raise OTPVerificationUsedError(
+                "La verificacion de este correo ya se uso para un registro. Solicita un codigo nuevo."
+            )
+        raise OTPNotVerifiedError(
+            "El correo no esta verificado o la verificacion expiro. Verifica tu correo con un codigo OTP."
+        )
+
+    async def consumir_verificado(self, email: str) -> None:
+        """Consume la marca de forma atomica (DEL devuelve cuantas claves borro: solo
+        una de dos peticiones simultaneas lo consigue) y deja la constancia de uso."""
+        if await self._redis.delete(self._verified_key(email)) == 0:
+            await self.comprobar_verificado(email)  # lanza el error que corresponda
+            raise OTPNotVerifiedError(  # la marca aparecio entre las dos llamadas: no se supone nada
+                "El correo no esta verificado o la verificacion expiro. Verifica tu correo con un codigo OTP."
+            )
+        await self._redis.set(self._verified_used_key(email), "1", ex=VERIFIED_USED_TTL_SECONDS)
 
 
 otp_service = OTPService()

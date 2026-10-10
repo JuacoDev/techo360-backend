@@ -120,6 +120,10 @@ async def verify_otp(payload: VerifyOTPRequest):
             detail=str(e)
         )
 
+    # Constancia que /auth/register exige y consume (el backend no confia en que el
+    # frontend haya pasado por aqui).
+    await otp_service.marcar_verificado(payload.email)
+
     return {
         "status": "verified",
         "email": payload.email
