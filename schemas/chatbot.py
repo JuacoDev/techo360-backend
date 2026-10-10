@@ -1,5 +1,6 @@
 from datetime import datetime
 from typing import Literal
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
 
@@ -14,7 +15,10 @@ class CrearConversacionRequest(BaseModel):
 class ConversacionResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
+    # Fase "expandir": se devuelven ambos. El cliente debe usar public_id; id (entero
+    # secuencial) se retira en la fase "contraer" (ver docs de la migracion 0003).
     id: int
+    public_id: UUID | None = None
     usuario_id: int
     consentimiento_entrenamiento: bool
     fecha: datetime
