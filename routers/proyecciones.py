@@ -27,6 +27,7 @@ from services.proyeccion_service import (
     calcular_proyeccion,
     calcular_zonas,
     calcular_zonas_score_privacion,
+    modelo_de_zonas,
 )
 
 
@@ -201,7 +202,7 @@ async def obtener_zonas_proyeccion(
     return {
         "indicador": indicador,
         "anio": anio,
-        "modelo": MODELO_VIGENTE,
+        "modelo": modelo_de_zonas(indicador),
         "zonas": zonas,
     }
 

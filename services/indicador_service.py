@@ -1,12 +1,16 @@
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from services.origen import es_proyeccion
+
 
 ANIO_INICIO_HISTORICO = 2008
 ANIO_FIN_HISTORICO = 2024
 
 
-# Métodos que representan datos completados/proyectados
+# Métodos que representan datos completados/proyectados. Lista HISTÓRICA (incluye nombres viejos sin el
+# prefijo "proyeccion-"); todo origen que es_proyeccion() (empieza por "proyeccion-" o termina en
+# "-proyeccion", p. ej. los proyeccion-techo360-* de la carga de proyecciones) también cuenta como backfill.
 ORIGENES_BACKFILL = {
     "ultimo-valor-observado",
     "interpolacion-lineal",
@@ -68,7 +72,7 @@ def obtener_historico_indicador(
 
         origen = fila["originvar"]
 
-        if origen in ORIGENES_BACKFILL:
+        if es_proyeccion(origen) or origen in ORIGENES_BACKFILL:
             tipo = "backfill"
         else:
             tipo = "observado"

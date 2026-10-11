@@ -14,6 +14,15 @@ from core.config import settings
 # para que nunca haya un hueco entre que expira una entrada y se reescribe.
 TTL_SEGUNDOS = 36 * 60 * 60
 
+# Version del contrato de zonas (ver AVISO v3 en ProyeccionCache). Subirla invalida
+# TODAS las entradas de zonas sin tocar Redis a mano.
+VERSION_ZONAS = "v3"
+
+# Los limites min-max de 2024 cambiaron de CONTENIDO el 2026-10-10 (ahora solo sobre los municipios
+# del universo, sin los codigos huerfanos): las entradas `proyeccion:v2:limites_base:*` que siguen
+# vivas en produccion (TTL 36 h) tienen la escala vieja y no deben leerse.
+VERSION_LIMITES = "v3"
+
 
 class ProyeccionCache:
     """Cache de las respuestas COMPLETAS de T-104/T-105 (no de cada
@@ -31,14 +40,25 @@ class ProyeccionCache:
     el otro bajo el mismo anio. La clave nueva (`proyeccion:v2:zonas:
     {indicador}:{anio}`) nunca lee la vieja -- las entradas viejas que
     sigan vivas en Redis (hasta por TTL_SEGUNDOS) simplemente quedan sin
-    uso y expiran solas, no se leen ni se borran a mano."""
+    uso y expiran solas, no se leen ni se borran a mano.
+
+    >>> AVISO -- v3 (2026-10-10): cambio de CONTRATO de zonas <<<
+    Las entradas de zonas ahora llevan origen/fiabilidad/componentes y es_real
+    significa "no es proyeccion-*" (antes: "hay una fila no proyectada"). Las
+    entradas `proyeccion:v2:zonas:*` que siguen vivas en produccion (TTL hasta 36 h)
+    tienen el contrato VIEJO: reusar el prefijo v2 las serviria tal cual. Por eso zonas
+    pasa a `proyeccion:v3:zonas:`. Las claves de serie (`proyeccion:serie:`) NO cambian de
+    contenido y conservan su prefijo. limites_base pasa tambien a `v3` (cambio de CONTENIDO:
+    min-max solo sobre el universo de municipios, ver VERSION_LIMITES).
+    scripts/limpiar_cache_proyeccion.py borra las v2 de zonas si se quiere no esperar
+    al TTL (por defecto solo lista; no se ejecuta en produccion sin autorizacion)."""
 
     def __init__(self):
         self._redis = aioredis.from_url(settings.redis_url, decode_responses=True)
 
     @staticmethod
     def _clave_zonas(indicador: str, anio: int) -> str:
-        return f"proyeccion:v2:zonas:{indicador}:{anio}"
+        return f"proyeccion:{VERSION_ZONAS}:zonas:{indicador}:{anio}"
 
     @staticmethod
     def _clave_serie(codigo_municipio: str, desde: int, hasta: int) -> str:
@@ -46,7 +66,7 @@ class ProyeccionCache:
 
     @staticmethod
     def _clave_limites_base(anio_base: int) -> str:
-        return f"proyeccion:v2:limites_base:{anio_base}"
+        return f"proyeccion:{VERSION_LIMITES}:limites_base:{anio_base}"
 
     async def obtener_zonas(self, indicador: str, anio: int) -> list[dict] | None:
         crudo = await self._redis.get(self._clave_zonas(indicador, anio))

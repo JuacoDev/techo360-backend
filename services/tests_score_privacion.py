@@ -4,7 +4,7 @@ proyecto no tiene pytest en requirements.txt, asi que esto usa unittest
 (stdlib), igual que ingestion/tests_terridata_adapter.py.
 
 No usa base de datos ni Redis reales: calcular_limites_base/
-obtener_deficit_base/calcular_zonas/proyeccion_cache se mockean.
+obtener_deficit_para_anio/calcular_zonas/proyeccion_cache se mockean.
 
 Uso:
     python -m services.tests_score_privacion
@@ -101,7 +101,7 @@ class TestCalcularScorePrivacion(unittest.TestCase):
 
 class TestCalcularZonasScorePrivacion(unittest.IsolatedAsyncioTestCase):
     """calcular_zonas_score_privacion() con calcular_zonas (RPC),
-    calcular_limites_base/obtener_deficit_base (BD) y proyeccion_cache
+    calcular_limites_base/obtener_deficit_para_anio (BD) y proyeccion_cache
     (Redis) mockeados -- nada de esto toca un servicio real."""
 
     def setUp(self):
@@ -110,11 +110,23 @@ class TestCalcularZonasScorePrivacion(unittest.IsolatedAsyncioTestCase):
             "cobertura_alcantarillado": (70.0, 90.0),
             "deficit_habitacional_cuantitativo": (2.0, 8.0),
         }
-        self.deficit_base = {"05001": 5.0, "05002": 5.0}
+        # Registro de deficit tal como lo devuelve obtener_deficit_para_anio():
+        # congelado de 2024 (es_real=False) salvo que el test diga otra cosa.
+        self.deficit_base = {"05001": self._reg(5.0), "05002": self._reg(5.0)}
+
+    @staticmethod
+    def _reg(valor, es_real=False):
+        return {
+            "valor": valor,
+            "origen": "TerriData" if es_real else "proyeccion-tendencia-nacional-2018-2024",
+            "es_real": es_real,
+            "fiabilidad": 100.0 if es_real else 70.0,
+            "anio_fuente": 2024,
+        }
 
     async def test_municipio_con_los_tres_insumos(self):
         with patch.object(servicio, "calcular_limites_base", return_value=self.limites_base), \
-             patch.object(servicio, "obtener_deficit_base", return_value=self.deficit_base), \
+             patch.object(servicio, "obtener_deficit_para_anio", return_value=self.deficit_base), \
              patch.object(
                  servicio.proyeccion_cache, "obtener_limites_base", new=AsyncMock(return_value=None)
              ), \
@@ -144,7 +156,7 @@ class TestCalcularZonasScorePrivacion(unittest.IsolatedAsyncioTestCase):
 
     async def test_municipio_falta_en_uno_de_los_dos_da_valor_null(self):
         with patch.object(servicio, "calcular_limites_base", return_value=self.limites_base), \
-             patch.object(servicio, "obtener_deficit_base", return_value=self.deficit_base), \
+             patch.object(servicio, "obtener_deficit_para_anio", return_value=self.deficit_base), \
              patch.object(
                  servicio.proyeccion_cache, "obtener_limites_base", new=AsyncMock(return_value=self.limites_base)
              ), \
@@ -166,7 +178,7 @@ class TestCalcularZonasScorePrivacion(unittest.IsolatedAsyncioTestCase):
 
     async def test_falla_una_rpc_no_devuelve_score_a_medias(self):
         with patch.object(servicio, "calcular_limites_base", return_value=self.limites_base), \
-             patch.object(servicio, "obtener_deficit_base", return_value=self.deficit_base), \
+             patch.object(servicio, "obtener_deficit_para_anio", return_value=self.deficit_base), \
              patch.object(
                  servicio.proyeccion_cache, "obtener_limites_base", new=AsyncMock(return_value=self.limites_base)
              ), \
@@ -191,14 +203,16 @@ class TestCalcularZonasScorePrivacion(unittest.IsolatedAsyncioTestCase):
         el dato real cuando existe, no una regresion), el score
         proyectado debe ser IDENTICO al que calcularia routers/zonas.py
         con el mismo año como "real" -- misma formula, mismos limites
-        (el año pedido Y el año base son el mismo, 2024)."""
+        (el año pedido Y el año base son el mismo, 2024). Desde 2026-10-10
+        es_real del score exige que los TRES insumos sean reales, asi que
+        aqui el deficit tambien lo es (fila real del año)."""
         acueducto_real = 90.0
         alcantarillado_real = 80.0
         deficit_real = 5.0
 
         with patch.object(servicio, "calcular_limites_base", return_value=self.limites_base), \
              patch.object(
-                 servicio, "obtener_deficit_base", return_value={"05001": deficit_real}
+                 servicio, "obtener_deficit_para_anio", return_value={"05001": self._reg(deficit_real, es_real=True)}
              ), \
              patch.object(
                  servicio.proyeccion_cache, "obtener_limites_base", new=AsyncMock(return_value=self.limites_base)

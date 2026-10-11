@@ -45,7 +45,7 @@ Estado de `development` (lo que corre en producción) hasta el SHA `a4553e6`. La
 - Migración de la base: `techo360-chatbot/migrations/0002_mensajes_estado.sql` (aplicada a mano el 5-oct; antes que el backend).
 
 ### Qué guarda Redis (sin persistencia)
-- Caché: `zonas:v1:...`, `proyeccion:v2:...` y `proyeccion:serie:...`.
+- Caché: `zonas:v1:...`, `proyeccion:v3:zonas:...` (contrato con origen/fiabilidad/componentes, 10-oct-2026), `proyeccion:v3:limites_base:...` (min-max de 2024 solo sobre los municipios del universo, 10-oct-2026) y `proyeccion:serie:...`. Las `proyeccion:v2:zonas:*` y `v2:limites_base:*` viejas expiran solas (36 h); `scripts/limpiar_cache_proyeccion.py` las lista (y con `--ejecutar` las borra; no se ejecuta sin autorización).
 - OTP y límites: `otp:<correo>:code` (10 min), `otp:<correo>:attempts` (5 intentos), `otp:<correo>:cooldown` (60 s) y `otp:ip_limit:<ip>` (10 por 15 min), y `email:sent_count:<fecha>`.
 - Guardias del scheduler: `pipeline_datos:ultima_corrida:<fecha>` y `zonas_igac:ultima_corrida:<fecha>` (26 h).
 - Las sesiones **no** están en Redis (son JWT). El volumen de Redis es anónimo: se pierde al recrear el contenedor.
@@ -57,8 +57,11 @@ Resumen de la corrida: 6 fuentes OK, 0 registros rechazados, 0 advertencias, 1 b
 - Dataset FNA `8njd-mfua` (`cercania_constructoras_vis`): `404 Not Found` (bloqueada).
 - No verificado: si estos fallos ya ocurrían en semanas anteriores.
 
+### Scripts manuales: `proyeccion_2024.py` NO debe reejecutarse tras la carga M4
+`ingestion/proyeccion_2024.py` reescribe (vía `guardar_indicador`, sin filtrar origen) las anclas de déficit 2024 con la fórmula vieja (×1,36 recortado a 100) y las copias de tenencia 2024. Después de la carga M4 **revertiría 102 anclas de cuantitativo 2024 (saturación suave) y 302 copias de tenencia 2024** a sus valores y orígenes anteriores. Tiene `--dry-run`, no está en el scheduler y no se debe correr sin una decisión explícita. (`rellenar_baseline_2025_2026.py` e `interpolar_tenencia_informal.py`, en techo360-proyeccion, solo hacen INSERT: tras la carga el trigger de unicidad los frena.)
+
 ### Pruebas
-`unittest` con dobles, sin framework, ejecutadas el 4–5-oct: `python -m routers.tests_chatbot_estados` (42), `services.tests_zonas_cache` (49), `services.tests_precalentamiento` (22), `services.tests_sesion_token` (10), `services.tests_score_privacion` (14), `services.tests_invalidacion_ingesta` (4) y `routers.tests_zonas_excluidas` (5). Las pruebas contra PostgreSQL real (`services.tests_chatbot_estados_pg`, 36) se saltan solas salvo que `PG_BIN` apunte a los binarios de PostgreSQL 16 y `MIGRACION_0002_SQL` a la migración.
+`unittest` con dobles, sin framework, ejecutadas el 4–5-oct: `python -m routers.tests_chatbot_estados` (42), `services.tests_zonas_cache` (49), `services.tests_precalentamiento` (22), `services.tests_sesion_token` (10), `services.tests_score_privacion` (14), `services.tests_contrato_proyeccion` (25, etiquetado real/proyección y score con componentes), `services.tests_indicador_service` (6, tipo backfill/observado del histórico con orígenes proyeccion-*), `services.tests_minmax_universo` (16, min-max solo sobre el universo de municipios y recorte a [0, 1]), `services.tests_invalidacion_ingesta` (4) y `routers.tests_zonas_excluidas` (5). Las pruebas contra PostgreSQL real (`services.tests_chatbot_estados_pg`, 36) se saltan solas salvo que `PG_BIN` apunte a los binarios de PostgreSQL 16 y `MIGRACION_0002_SQL` a la migración.
 
 ### No verificado
 Reintentar con la cola ocupada y el posible 504 de nginx (ver el README del frontend); el reencolado de un mensaje en vuelo al recrear el chatbot; los proxies fuera del VPS.
