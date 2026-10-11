@@ -62,6 +62,14 @@ class Settings(BaseSettings):
     # Archivos generados por el consumer de reportes
     reportes_dir: str = "data/reportes"
 
+    # Caché de 24 h de los reportes generados en Redis (ver services/reportes_cache.py). El Redis de
+    # produccion tiene 128 MB sin maxmemory: los topes evitan que los archivos lo comprometan.
+    reportes_cache_activa: bool = True
+    reportes_cache_ttl_s: int = 24 * 60 * 60
+    reportes_cache_max_archivo: int = 3 * 1024 * 1024  # un archivo mayor no se cachea (queda en disco temporal)
+    reportes_cache_por_usuario: int = 5  # reportes cacheados por usuario; el mas antiguo se descarta
+    reportes_cache_redis_max_usado: int = 80 * 1024 * 1024  # si Redis ya usa mas, no se escribe
+
     # RabbitMQ
     # NOTA: mismo criterio que database_url -- placeholder, no produccion.
     rabbitmq_url: str = (

@@ -22,8 +22,16 @@ class Reporte(Base):
     formato = Column(String(10), nullable=True)
     solicitud = Column(JSONB, nullable=True)
     archivo_nombre = Column(String(255), nullable=True)
+    # Huella de la configuración (clave de la caché de 24 h); la configuración vive en `solicitud`.
+    huella = Column(String(64), nullable=True)
     error = Column(Text, nullable=True)
     fecha_creacion = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    # Última vez que se pidió generarlo (el historial muestra «hace cuánto»).
+    actualizado_en = Column(
         DateTime(timezone=True),
         nullable=False,
         server_default=func.now(),

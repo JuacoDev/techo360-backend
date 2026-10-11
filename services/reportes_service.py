@@ -1,39 +1,23 @@
 import logging
 import math
+import time
 import uuid
 from collections import defaultdict
 from pathlib import Path
-from xml.sax.saxutils import escape
 
 from openpyxl import Workbook
 from openpyxl.chart import LineChart, Reference
 from openpyxl.styles import Font, PatternFill
-from reportlab.graphics import renderPDF
-from reportlab.graphics.charts.legends import LineLegend
-from reportlab.graphics.charts.linecharts import HorizontalLineChart
-from reportlab.graphics.shapes import Drawing
-from reportlab.lib import colors
-from reportlab.lib.enums import TA_CENTER
-from reportlab.lib.pagesizes import landscape, letter
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib.units import inch
-from reportlab.platypus import (
-    Flowable,
-    KeepTogether,
-    PageBreak,
-    Paragraph,
-    SimpleDocTemplate,
-    Spacer,
-    Table,
-    TableStyle,
-)
+from openpyxl.utils import get_column_letter
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from core.config import settings
 from db.session import SessionLocal, engine
+from models.mapcalor_user import MapCalorUser
 from models.reporte import Reporte
 from schemas.reporte import ReporteGenerarRequest
+from services.reportes_cache import cache_reportes
 from services.score_privacion import (
     CODIGO_AGREGADO_NACIONAL_TERRIDATA,
     VARIABLES_SCORE,
@@ -84,7 +68,13 @@ def preparar_esquema_reportes() -> None:
                 ADD COLUMN IF NOT EXISTS formato VARCHAR(10),
                 ADD COLUMN IF NOT EXISTS solicitud JSONB,
                 ADD COLUMN IF NOT EXISTS archivo_nombre VARCHAR(255),
-                ADD COLUMN IF NOT EXISTS error TEXT
+                ADD COLUMN IF NOT EXISTS error TEXT,
+                ADD COLUMN IF NOT EXISTS huella VARCHAR(64),
+                ADD COLUMN IF NOT EXISTS actualizado_en TIMESTAMPTZ NOT NULL DEFAULT now()
+        """))
+        conexion.execute(text("""
+            CREATE INDEX IF NOT EXISTS ix_reportes_usuario_actualizado
+                ON public.reportes (usuario_id, actualizado_en DESC)
         """))
 
 
@@ -130,7 +120,10 @@ def validar_zonas_existentes(db: Session, solicitud: ReporteGenerarRequest) -> N
 def obtener_datos_reporte(
     db: Session,
     solicitud: ReporteGenerarRequest,
+    variables: list[str] | None = None,
 ) -> tuple[list[dict], list[dict]]:
+    """(zonas, series). `variables` por defecto son las del reporte; las gráficas pueden pedir más."""
+    variables = list(variables) if variables is not None else list(solicitud.variables)
     departamentos_solicitados = solicitud.zonas.departamentos
     municipios_solicitados = solicitud.zonas.municipios
     zonas: list[dict] = []
@@ -175,22 +168,37 @@ def obtener_datos_reporte(
     if municipios_solicitados:
         municipios = db.execute(
             text("""
-                SELECT codigo_municipio AS codigo, nombre
-                FROM public.zonas_municipio
-                WHERE codigo_municipio = ANY(:codigos)
-                  AND codigo_municipio != '00000'
-                ORDER BY nombre
+                SELECT zm.codigo_municipio AS codigo, zm.nombre,
+                       zm.codigo_departamento, zd.nombre AS departamento
+                FROM public.zonas_municipio zm
+                LEFT JOIN public.zonas_departamento zd
+                       ON zd.codigo_departamento = zm.codigo_departamento
+                WHERE zm.codigo_municipio = ANY(:codigos)
+                  AND zm.codigo_municipio != '00000'
+                ORDER BY zm.nombre
             """),
             {"codigos": municipios_solicitados},
         ).mappings().all()
         if len(municipios) != len(municipios_solicitados):
             raise ValueError("Uno o más códigos de municipio no existen.")
         for municipio in municipios:
+            departamento = municipio["departamento"]
+            # "Bucaramanga, Santander"; Bogotá (11001) va sin departamento.
+            sin_departamento = (
+                not departamento
+                or municipio["codigo"] == "11001"
+                or municipio["codigo_departamento"] == "11"
+            )
             zonas.append(
                 {
                     "nivel": "municipio",
                     "codigo": municipio["codigo"],
                     "nombre": municipio["nombre"],
+                    "etiqueta": (
+                        municipio["nombre"]
+                        if sin_departamento
+                        else f"{municipio['nombre']}, {departamento}"
+                    ),
                 }
             )
 
@@ -201,7 +209,7 @@ def obtener_datos_reporte(
     variables_datos = sorted(
         {
             variable
-            for variable in solicitud.variables
+            for variable in variables
             if variable != "score_privacion"
         }
         | set(VARIABLES_SCORE)
@@ -292,7 +300,7 @@ def obtener_datos_reporte(
             )
 
         for anio in range(anio_inicio, anio_fin + 1):
-            for variable in solicitud.variables:
+            for variable in variables:
                 valores: list[float] = []
                 origenes: set[str] = set()
                 if variable == "score_privacion":
@@ -366,7 +374,7 @@ def _valores_por_grafica(
         if any(valor is not None for valor in valores):
             series_grafica.append(
                 (
-                    f"{zona['nombre']} ({zona['codigo']})",
+                    f"{zona.get('etiqueta') or zona['nombre']} ({zona['codigo']})",
                     valores,
                 )
             )
@@ -380,251 +388,37 @@ PALETA_GRAFICA = [
 MAX_SERIES_LEYENDA = 10
 
 
-class ReporteGrafica(Flowable):
-    """Línea por zona a lo largo de los años (años en X) con leyenda de colores.
-
-    Si hay más zonas que colores, se grafican las primeras MAX_SERIES_LEYENDA
-    (el resto sigue completo en las tablas) para que la leyenda siga legible.
-    """
-
-    def __init__(self, variable: str, anios: list[str], datos: list[tuple[str, list[float | None]]]):
-        super().__init__()
-        self.variable = variable
-        self.anios = anios
-        self.datos = datos[:MAX_SERIES_LEYENDA]
-        self.recortada = len(datos) > MAX_SERIES_LEYENDA
-        self.width = 9.3 * inch
-        filas_leyenda = (len(self.datos) + 1) // 2
-        self.alto_leyenda = 14 * filas_leyenda + 6
-        self.height = 3.0 * inch + self.alto_leyenda
-
-    def wrap(self, aviable_width, aviable_height):
-        return self.width, self.height
-
-    def draw(self):
-        # Una gráfica que no se pueda dibujar no debe tumbar el reporte entero.
-        try:
-            self._dibujar()
-        except Exception:
-            logger.exception("No se pudo dibujar la gráfica de %s.", self.variable)
-            self.canv.setFont("Helvetica-Oblique", 9)
-            self.canv.setFillColor(colors.HexColor("#B3261E"))
-            self.canv.drawString(0, self.height / 2, "No se pudo dibujar esta gráfica; los datos están en las tablas.")
-
-    def _dibujar(self):
-        drawing = Drawing(self.width, self.height)
-        grafica = HorizontalLineChart()
-        grafica.x = 48
-        grafica.y = self.alto_leyenda + 35
-        grafica.width = self.width - 65
-        grafica.height = self.height - self.alto_leyenda - 55
-        grafica.categoryAxis.categoryNames = self.anios
-        grafica.categoryAxis.labels.fontSize = 8
-        grafica.valueAxis.labels.fontSize = 8
-        grafica.valueAxis.valueMin = None
-        grafica.data = [
-            tuple(float(valor) if valor is not None else None for valor in valores)
-            for _, valores in self.datos
-        ]
-        for indice in range(len(self.datos)):
-            grafica.lines[indice].strokeColor = colors.HexColor(PALETA_GRAFICA[indice])
-            grafica.lines[indice].strokeWidth = 1.8
-            grafica.lines[indice].symbol = None
-        drawing.add(grafica)
-
-        leyenda = LineLegend()
-        leyenda.x = 48
-        leyenda.y = self.alto_leyenda - 6
-        leyenda.alignment = "right"
-        leyenda.fontSize = 8
-        leyenda.dx = 14
-        leyenda.dy = 6
-        leyenda.dxTextSpace = 5
-        leyenda.deltax = (self.width - 65) / 2
-        leyenda.deltay = 13
-        leyenda.columnMaximum = (len(self.datos) + 1) // 2
-        leyenda.colorNamePairs = [
-            (colors.HexColor(PALETA_GRAFICA[indice]), nombre[:48])
-            for indice, (nombre, _) in enumerate(self.datos)
-        ]
-        drawing.add(leyenda)
-        renderPDF.draw(drawing, self.canv, 0, 0)
-
-
 def _crear_pdf(
     path: Path,
     solicitud: ReporteGenerarRequest,
     zonas: list[dict],
     series: list[dict],
+    autor: str | None = None,
+    escenas: list | None = None,
 ) -> None:
-    doc = SimpleDocTemplate(
-        str(path),
-        pagesize=landscape(letter),
-        leftMargin=0.45 * inch,
-        rightMargin=0.45 * inch,
-        topMargin=0.5 * inch,
-        bottomMargin=0.5 * inch,
-        title=solicitud.opciones.titulo,
-    )
-    estilos = getSampleStyleSheet()
-    estilos.add(
-        ParagraphStyle(
-            name="TituloReporte",
-            parent=estilos["Title"],
-            alignment=TA_CENTER,
-            textColor=colors.HexColor("#126782"),
-        )
-    )
-    historia: list[Flowable] = [
-        Paragraph(escape(solicitud.opciones.titulo), estilos["TituloReporte"]),
-        Spacer(1, 0.15 * inch),
-        Paragraph(
-            f"Periodo: {solicitud.periodo.anio_inicio} - {solicitud.periodo.anio_fin}",
-            estilos["Normal"],
-        ),
-    ]
-    if solicitud.opciones.introduccion:
-        historia.extend(
-            [
-                Spacer(1, 0.1 * inch),
-                Paragraph("Introducción", estilos["Heading2"]),
-                Paragraph(escape(solicitud.opciones.introduccion).replace("\n", "<br/>"), estilos["BodyText"]),
-            ]
-        )
-    historia.extend(
-        [
-            Spacer(1, 0.2 * inch),
-            Paragraph("Resultados", estilos["Heading1"]),
-            Paragraph(
-                "Los valores departamentales son promedios simples de los municipios con dato disponible. "
-                "El score de privación usa la normalización oficial del backend por año.",
-                estilos["BodyText"],
-            ),
-        ]
-    )
+    """PDF con la plantilla elegida (APA 7 o IEEE); ver services/reportes_pdf.py."""
+    from services import reportes_pdf  # import tardío: reportes_pdf importa este módulo
 
-    encabezados = ["Año"] + [
-        VARIABLES_REPORTE[variable][0]
-        for variable in solicitud.variables
-    ]
-    for zona in zonas:
-        filas_zona = [
-            fila for fila in series
-            if fila["codigo"] == zona["codigo"] and fila["nivel"] == zona["nivel"]
-        ]
-        historia.extend(
-            [
-                Spacer(1, 0.15 * inch),
-                Paragraph(
-                    f"{escape(zona['nombre'])} ({zona['nivel']}, {zona['codigo']})",
-                    estilos["Heading2"],
-                ),
-            ]
-        )
-        comentario = solicitud.opciones.comentarios.get(zona["codigo"], "")
-        if comentario:
-            historia.append(
-                Paragraph(
-                    f"Comentario: {escape(comentario).replace(chr(10), '<br/>')}",
-                    estilos["BodyText"],
-                )
-            )
-        por_anio: dict[int, dict[str, dict]] = defaultdict(dict)
-        for fila in filas_zona:
-            por_anio[fila["anio"]][fila["variable"]] = fila
-        datos_tabla: list[list] = [encabezados]
-        for anio in range(solicitud.periodo.anio_inicio, solicitud.periodo.anio_fin + 1):
-            fila_tabla: list[str] = [str(anio)]
-            for variable in solicitud.variables:
-                dato = por_anio[anio].get(variable)
-                valor = dato["valor"] if dato else None
-                unidad = VARIABLES_REPORTE[variable][1]
-                fila_tabla.append(
-                    "Sin dato"
-                    if valor is None
-                    else f"{valor:.4f}{unidad}"
-                )
-            datos_tabla.append(fila_tabla)
-        ancho_columna = doc.width / len(encabezados)
-        encabezados_tabla = [
-            Paragraph(escape(str(valor)), estilos["BodyText"])
-            for valor in encabezados
-        ]
-        datos_tabla[0] = encabezados_tabla
-        tabla = Table(
-            datos_tabla,
-            colWidths=[ancho_columna] * len(encabezados),
-            repeatRows=1,
-            hAlign="LEFT",
-        )
-        tabla.setStyle(
-            TableStyle(
-                [
-                    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#126782")),
-                    ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-                    ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                    ("FONTSIZE", (0, 0), (-1, -1), 8),
-                    ("GRID", (0, 0), (-1, -1), 0.35, colors.HexColor("#B7C9D1")),
-                    ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F1F6F8")]),
-                    ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-                ]
-            )
-        )
-        historia.append(tabla)
-
-    if solicitud.opciones.incluir_graficas:
-        historia.extend([PageBreak(), Paragraph("Gráficas", estilos["Heading1"])])
-        for variable in solicitud.variables:
-            anios, valores = _valores_por_grafica(
-                zonas,
-                series,
-                variable,
-                solicitud.periodo.anio_inicio,
-                solicitud.periodo.anio_fin,
-            )
-            if not valores:
-                continue
-            grafica = ReporteGrafica(variable, anios, valores)
-            nota = (
-                f"Cada línea representa una zona (se muestran las primeras {MAX_SERIES_LEYENDA} de {len(valores)}; "
-                "los datos completos están en las tablas)."
-                if grafica.recortada
-                else "Cada línea representa una zona incluida en los resultados."
-            )
-            historia.append(
-                KeepTogether(
-                    [
-                        Paragraph(VARIABLES_REPORTE[variable][0], estilos["Heading2"]),
-                        Paragraph(nota, estilos["BodyText"]),
-                        grafica,
-                    ]
-                )
-            )
-
-    if solicitud.opciones.conclusiones:
-        historia.extend(
-            [
-                PageBreak(),
-                Paragraph("Conclusiones", estilos["Heading1"]),
-                Paragraph(
-                    escape(solicitud.opciones.conclusiones).replace("\n", "<br/>"),
-                    estilos["BodyText"],
-                ),
-            ]
-        )
-    doc.build(historia)
+    if solicitud.opciones.plantilla == "ieee":
+        reportes_pdf.crear_pdf_ieee(path, solicitud, zonas, series, autor, escenas)
+    else:
+        reportes_pdf.crear_pdf_apa(path, solicitud, zonas, series, autor, escenas)
 
 
-def _crear_excel(
+def _texto_seguro(valor: str) -> str:
+    if valor.startswith(("=", "+", "-", "@")):
+        return "'" + valor
+    return valor
+
+
+def _crear_excel_completo(
     path: Path,
     solicitud: ReporteGenerarRequest,
     zonas: list[dict],
     series: list[dict],
+    escenas: list | None = None,
 ) -> None:
-    def texto_seguro(valor: str) -> str:
-        if valor.startswith(("=", "+", "-", "@")):
-            return "'" + valor
-        return valor
+    texto_seguro = _texto_seguro
 
     libro = Workbook()
     resumen = libro.active
@@ -642,7 +436,7 @@ def _crear_excel(
             [
                 zona["nivel"],
                 texto_seguro(zona["codigo"]),
-                texto_seguro(zona["nombre"]),
+                texto_seguro(zona.get("etiqueta") or zona["nombre"]),
                 texto_seguro(solicitud.opciones.comentarios.get(zona["codigo"], "")),
             ]
         )
@@ -656,7 +450,7 @@ def _crear_excel(
             [
                 fila["nivel"],
                 texto_seguro(fila["codigo"]),
-                texto_seguro(fila["nombre"]),
+                texto_seguro(fila.get("etiqueta") or fila["nombre"]),
                 fila["anio"],
                 texto_seguro(VARIABLES_REPORTE[fila["variable"]][0]),
                 fila["valor"],
@@ -684,7 +478,7 @@ def _crear_excel(
             )
             hoja.column_dimensions[columna[0].column_letter].width = ancho
     hoja_datos.auto_filter.ref = hoja_datos.dimensions
-    if solicitud.opciones.incluir_graficas:
+    if solicitud.opciones.incluir_graficas and not solicitud.graficas:
         for indice, variable in enumerate(solicitud.variables, start=1):
             anios, valores = _valores_por_grafica(
                 zonas,
@@ -728,7 +522,179 @@ def _crear_excel(
             except Exception:
                 logger.exception("No se pudo crear la gráfica de %s.", variable)
                 libro.remove(hoja)
+    _hojas_graficas(libro, escenas)
     libro.save(path)
+
+
+def _crear_excel_comparativo(
+    path: Path,
+    solicitud: ReporteGenerarRequest,
+    zonas: list[dict],
+    series: list[dict],
+    escenas: list | None = None,
+) -> None:
+    """Una hoja por variable con las zonas en filas y los años en columnas (más la variación del
+    periodo y, si se pidió, una gráfica de líneas por hoja). Pensado para comparar zonas de un vistazo."""
+    inicio = solicitud.periodo.anio_inicio
+    fin = solicitud.periodo.anio_fin
+    anios = list(range(inicio, fin + 1))
+    libro = Workbook()
+    resumen = libro.active
+    resumen.title = "Resumen"
+    resumen.append(["Título", _texto_seguro(solicitud.opciones.titulo)])
+    resumen.append(["Periodo", f"{inicio} - {fin}"])
+    resumen.append(["Plantilla", "Comparativo (zonas en filas, años en columnas)"])
+    resumen.append(["Introducción", _texto_seguro(solicitud.opciones.introduccion)])
+    resumen.append(["Conclusiones", _texto_seguro(solicitud.opciones.conclusiones)])
+    resumen.append([])
+    resumen.append(["Nivel", "Código", "Zona", "Comentario"])
+    for zona in zonas:
+        resumen.append(
+            [
+                zona["nivel"],
+                _texto_seguro(zona["codigo"]),
+                _texto_seguro(zona.get("etiqueta") or zona["nombre"]),
+                _texto_seguro(solicitud.opciones.comentarios.get(zona["codigo"], "")),
+            ]
+        )
+    valores_por_zona: dict[tuple[str, str, str], dict[int, float | None]] = defaultdict(dict)
+    for fila in series:
+        valores_por_zona[(fila["nivel"], fila["codigo"], fila["variable"])][fila["anio"]] = _finito(fila["valor"])
+
+    hojas = [resumen]
+    for variable in solicitud.variables:
+        etiqueta, unidad = VARIABLES_REPORTE[variable]
+        hoja = libro.create_sheet(etiqueta[:31])
+        hoja.append(["Nivel", "Código", "Zona"] + anios + ["Variación del periodo"])
+        for zona in zonas:
+            por_anio = valores_por_zona.get((zona["nivel"], zona["codigo"], variable), {})
+            fila_valores = [por_anio.get(anio) for anio in anios]
+            presentes = [valor for valor in fila_valores if valor is not None]
+            variacion = presentes[-1] - presentes[0] if len(presentes) >= 2 else None
+            hoja.append(
+                [zona["nivel"], _texto_seguro(zona["codigo"]), _texto_seguro(zona.get("etiqueta") or zona["nombre"])]
+                + fila_valores
+                + [variacion]
+            )
+        hojas.append(hoja)
+        if solicitud.opciones.incluir_graficas and not solicitud.graficas and zonas:
+            try:
+                grafica = LineChart()
+                grafica.title = etiqueta
+                grafica.y_axis.title = unidad or "Valor"
+                grafica.x_axis.title = "Año"
+                grafica.height = 9
+                grafica.width = 22
+                ultima_columna = 3 + len(anios)
+                datos = Reference(hoja, min_col=3, max_col=ultima_columna, min_row=2, max_row=1 + len(zonas))
+                categorias = Reference(hoja, min_col=4, max_col=ultima_columna, min_row=1, max_row=1)
+                grafica.add_data(datos, from_rows=True, titles_from_data=True)
+                grafica.set_categories(categorias)
+                hoja.add_chart(grafica, f"A{len(zonas) + 4}")
+            except Exception:
+                logger.exception("No se pudo crear la gráfica comparativa de %s.", variable)
+
+    for hoja in hojas:
+        hoja.freeze_panes = "A2"
+        for celda in hoja[1]:
+            celda.font = Font(bold=True, color="FFFFFF")
+            celda.fill = PatternFill("solid", fgColor="126782")
+        for columna in hoja.columns:
+            ancho = min(50, max(10, max(len(str(celda.value or "")) for celda in list(columna)[:1000]) + 2))
+            hoja.column_dimensions[columna[0].column_letter].width = ancho
+    _hojas_graficas(libro, escenas)
+    libro.save(path)
+
+
+def _hojas_graficas(libro, escenas: list | None) -> None:
+    """Una hoja por gráfica elegida: su tabla de datos y, cuando Excel tiene un equivalente nativo
+    (barras, apiladas, líneas, dispersión, donut, histograma), la gráfica editable."""
+    from openpyxl.chart import BarChart, DoughnutChart, ScatterChart, Series
+
+    for numero, (spec, resultado) in enumerate(escenas or [], start=1):
+        hoja = libro.create_sheet(f"Gráfica {numero}"[:31])
+        hoja.append([_texto_seguro(resultado.titulo)])
+        hoja["A1"].font = Font(bold=True, size=13)
+        hoja.append([])
+        encabezados = resultado.tabla["encabezados"]
+        filas = resultado.tabla["filas"]
+        if encabezados:
+            hoja.append([_texto_seguro(str(e)) for e in encabezados])
+            for celda in hoja[3]:
+                celda.font = Font(bold=True, color="FFFFFF")
+                celda.fill = PatternFill("solid", fgColor="126782")
+            for fila in filas:
+                hoja.append([_texto_seguro(v) if isinstance(v, str) else (_finito(v) if isinstance(v, float) else v) for v in fila])
+        if resultado.nota:
+            hoja.append([])
+            hoja.append([_texto_seguro(resultado.nota)])
+        for columna in hoja.columns:
+            ancho = min(46, max(12, max(len(str(c.value or "")) for c in list(columna)[:200]) + 2))
+            hoja.column_dimensions[columna[0].column_letter].width = ancho
+        n = len(filas)
+        if not encabezados or n == 0:
+            continue
+        columnas = len(encabezados)
+        ancla = f"{get_column_letter(columnas + 2)}3"
+        try:
+            grafica = None
+            tipo = spec.tipo
+            if tipo in ("barras_ranking", "barras_agrupadas", "barras_apiladas"):
+                grafica = BarChart()
+                grafica.type = "bar"
+                ultima = 2 if tipo == "barras_ranking" else (columnas - 1 if tipo == "barras_apiladas" and encabezados[-1] == "Total" else columnas)
+                grafica.add_data(Reference(hoja, min_col=2, max_col=ultima, min_row=3, max_row=3 + n), titles_from_data=True)
+                grafica.set_categories(Reference(hoja, min_col=1, min_row=4, max_row=3 + n))
+                if tipo == "barras_apiladas":
+                    grafica.grouping = "stacked"
+                    grafica.overlap = 100
+            elif tipo == "lineas":
+                grafica = LineChart()
+                grafica.add_data(Reference(hoja, min_col=2, max_col=columnas, min_row=3, max_row=3 + n), titles_from_data=True)
+                grafica.set_categories(Reference(hoja, min_col=1, min_row=4, max_row=3 + n))
+            elif tipo == "histograma":
+                grafica = BarChart()
+                grafica.add_data(Reference(hoja, min_col=3, min_row=3, max_row=3 + n), titles_from_data=True)
+                grafica.set_categories(Reference(hoja, min_col=1, min_row=4, max_row=3 + n))
+            elif tipo == "donut":
+                grafica = DoughnutChart()
+                grafica.add_data(Reference(hoja, min_col=2, min_row=3, max_row=3 + n), titles_from_data=True)
+                grafica.set_categories(Reference(hoja, min_col=1, min_row=4, max_row=3 + n))
+            elif tipo == "dispersion" and columnas >= 3:
+                grafica = ScatterChart()
+                grafica.style = 13
+                serie = Series(
+                    Reference(hoja, min_col=3, min_row=4, max_row=3 + n),
+                    Reference(hoja, min_col=2, min_row=4, max_row=3 + n),
+                    title="Zonas",
+                )
+                serie.marker.symbol = "circle"
+                serie.graphicalProperties.line.noFill = True
+                grafica.series.append(serie)
+                grafica.x_axis.title = str(encabezados[1])
+                grafica.y_axis.title = str(encabezados[2])
+            if grafica is not None:
+                grafica.title = resultado.titulo[:80]
+                grafica.height = 9
+                grafica.width = 18
+                hoja.add_chart(grafica, ancla)
+            else:
+                hoja.cell(row=5 + n + (2 if resultado.nota else 0), column=1, value="Esta gráfica no tiene equivalente nativo en Excel: su versión visual está en la vista previa y en el PDF.")
+        except Exception:
+            logger.exception("No se pudo crear la gráfica %s de la hoja %s.", spec.tipo, numero)
+
+
+def _crear_excel(
+    path: Path,
+    solicitud: ReporteGenerarRequest,
+    zonas: list[dict],
+    series: list[dict],
+    escenas: list | None = None,
+) -> None:
+    if solicitud.opciones.plantilla == "comparativo":
+        _crear_excel_comparativo(path, solicitud, zonas, series, escenas)
+    else:
+        _crear_excel_completo(path, solicitud, zonas, series, escenas)
 
 
 def construir_previa_graficas(solicitud: ReporteGenerarRequest, db: Session) -> dict:
@@ -759,16 +725,26 @@ def construir_previa_graficas(solicitud: ReporteGenerarRequest, db: Session) -> 
 def generar_archivo_reporte(
     solicitud: ReporteGenerarRequest,
     db: Session,
+    autor: str | None = None,
 ) -> tuple[str, int]:
-    zonas, series = obtener_datos_reporte(db, solicitud)
+    # Import tardío: estos módulos importan este.
+    from services.reportes_datos_graficas import escenas_de_solicitud, variables_de_graficas
+
+    todas_las_variables = variables_de_graficas(solicitud)
+    zonas, series_todas = obtener_datos_reporte(db, solicitud, todas_las_variables)
+    propias = set(solicitud.variables)
+    series = [fila for fila in series_todas if fila["variable"] in propias]
+    # ancho del lienzo de las escenas segun la plantilla (IEEE: una columna de 3,5 in)
+    ancho_escena = 360 if solicitud.opciones.plantilla == "ieee" else 560
+    escenas = escenas_de_solicitud(db, solicitud, zonas, series_todas, ancho_escena)
     DIRECTORIO_REPORTES.mkdir(parents=True, exist_ok=True)
     nombre_archivo = f"{uuid.uuid4().hex}.{solicitud.formato}"
     destino = DIRECTORIO_REPORTES / nombre_archivo
     try:
         if solicitud.formato == "pdf":
-            _crear_pdf(destino, solicitud, zonas, series)
+            _crear_pdf(destino, solicitud, zonas, series, autor, escenas)
         else:
-            _crear_excel(destino, solicitud, zonas, series)
+            _crear_excel(destino, solicitud, zonas, series, escenas)
     except Exception:
         destino.unlink(missing_ok=True)
         raise
@@ -787,18 +763,28 @@ def procesar_reporte(reporte_id: int) -> None:
         db.commit()
 
         solicitud = ReporteGenerarRequest.model_validate(reporte.solicitud)
-        nombre_archivo, cantidad_registros = generar_archivo_reporte(solicitud, db)
+        usuario = db.query(MapCalorUser).filter(MapCalorUser.id == reporte.usuario_id).first()
+        autor = usuario.namevar if usuario is not None else None
+        nombre_archivo, cantidad_registros = generar_archivo_reporte(solicitud, db, autor)
         archivo_generado = DIRECTORIO_REPORTES / nombre_archivo
+        # Caché de 24 h en Redis (si cabe); si no, el archivo queda en disco como antes.
+        guardado_en_cache = False
+        if reporte.huella:
+            guardado_en_cache = cache_reportes.guardar(reporte.huella, reporte.usuario_id, archivo_generado.read_bytes())
         reporte = db.query(Reporte).filter(Reporte.id == reporte_id).first()
         if reporte is None:
             raise RuntimeError("El reporte dejó de existir durante el procesamiento.")
         reporte.estado = "listo"
-        reporte.archivo_nombre = nombre_archivo
+        reporte.archivo_nombre = None if guardado_en_cache else nombre_archivo
         reporte.error = None
         reporte.contenido = (
             f"Reporte generado correctamente con {cantidad_registros} registros."
         )
         db.commit()
+        if guardado_en_cache:
+            archivo_generado.unlink(missing_ok=True)
+            archivo_generado = None
+        limpiar_archivos_vencidos()
         logger.info("Reporte %s generado correctamente.", reporte_id)
     except Exception:
         db.rollback()
@@ -820,6 +806,21 @@ def procesar_reporte(reporte_id: int) -> None:
             db.commit()
     finally:
         db.close()
+
+
+def limpiar_archivos_vencidos(horas: float = 24.0) -> int:
+    """Borra del disco los archivos generados hace más de `horas` (el disco es solo el respaldo de lo que no cupo
+    en la caché de Redis; la configuración sigue en la BD y el reporte puede regenerarse)."""
+    limite = time.time() - horas * 3600
+    borrados = 0
+    try:
+        for archivo in DIRECTORIO_REPORTES.iterdir():
+            if archivo.is_file() and archivo.stat().st_mtime < limite:
+                archivo.unlink(missing_ok=True)
+                borrados += 1
+    except OSError:
+        logger.warning("No se pudo limpiar el directorio de reportes.", exc_info=True)
+    return borrados
 
 
 def obtener_ruta_archivo(reporte: Reporte) -> Path | None:
