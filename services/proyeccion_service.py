@@ -2,9 +2,10 @@ import asyncio
 
 from sqlalchemy.orm import Session
 
-from schemas.proyecciones import PuntoProyeccion, PuntoZona
+from schemas.proyecciones import ComponenteScore, PuntoProyeccion, PuntoZona
 from services.proyeccion_cache import proyeccion_cache
 from services.proyeccion_rpc_client import solicitar_proyeccion
+from services.origen import FIABILIDAD_DATO_REAL, FIABILIDAD_MINIMA
 from services.score_privacion import (
     VARIABLE_ACUEDUCTO,
     VARIABLE_ALCANTARILLADO,
@@ -12,7 +13,7 @@ from services.score_privacion import (
     calcular_limites_base,
     calcular_score_privacion,
     normalizar_minmax,
-    obtener_deficit_base,
+    obtener_deficit_para_anio,
 )
 
 
@@ -79,6 +80,18 @@ ANIO_BASE_SCORE = 2024
 # que devuelve el RPC en vez de hardcodearlo.
 MODELO_VIGENTE = "regresion-lineal-4puntos"
 ORIGEN_PROYECCION = "proyeccion-regresion-lineal-4puntos"
+
+# 2026-10-10: para score_privacion el respaldo de las coberturas ya NO es la regresion
+# sino el ultimo valor real (techo360-proyeccion/app/services/proyeccion.py), y el
+# deficit es el congelado de 2024 (o la fila del año si existe). El campo `modelo` de
+# GET /api/proyecciones/zonas lo refleja por indicador.
+MODELO_SCORE_PRIVACION = "ultimo-valor-real+deficit-2024"
+ORIGEN_SCORE_PROYECTADO = "proyeccion-score-privacion"
+ORIGEN_SCORE_REAL = "score-privacion"
+
+
+def modelo_de_zonas(indicador: str) -> str:
+    return MODELO_SCORE_PRIVACION if indicador == INDICADOR_SCORE_PRIVACION else MODELO_VIGENTE
 
 # >>> Rango real cargado para densidad_poblacional (confirmado 28-sep-2026
 # con SQL directo contra MapCalorDB: min/max(yearM) agrupado por
@@ -179,8 +192,17 @@ async def calcular_zonas(indicador: str, anio: int) -> list[PuntoZona]:
         error_factory = _ERROR_POR_TIPO.get(respuesta.get("tipo"), ModeloNoDisponibleError)
         raise error_factory(detail)
 
+    # origen/fiabilidad vienen del servicio de proyeccion (etiquetado 2026-10-10). Si aun
+    # corre una version vieja que no los manda, quedan en None: la fiabilidad se deriva de
+    # es_real mas abajo (_componente) y el resto del contrato no cambia.
     return [
-        PuntoZona(codigo_municipio=zona["codigo_municipio"], valor=zona["valor"], es_real=zona["es_real"])
+        PuntoZona(
+            codigo_municipio=zona["codigo_municipio"],
+            valor=zona["valor"],
+            es_real=zona["es_real"],
+            origen=zona.get("origen"),
+            fiabilidad=zona.get("fiabilidad"),
+        )
         for zona in respuesta["zonas"]
     ]
 
@@ -203,30 +225,53 @@ async def _obtener_limites_base_cacheados(db: Session) -> dict:
     return limites
 
 
+def _componente(variable: str, punto: PuntoZona | None) -> ComponenteScore:
+    """Insumo de coberturas (viene de calcular_zonas). Sin punto -> componente vacio."""
+    if punto is None:
+        return ComponenteScore(variable=variable, valor=None, origen=None, es_real=False, fiabilidad=None)
+    fiabilidad = punto.fiabilidad
+    if fiabilidad is None:  # respuesta de una version vieja del servicio de proyeccion
+        fiabilidad = FIABILIDAD_DATO_REAL if punto.es_real else FIABILIDAD_MINIMA
+    return ComponenteScore(
+        variable=variable, valor=punto.valor, origen=punto.origen, es_real=punto.es_real, fiabilidad=fiabilidad
+    )
+
+
+def _componente_deficit(registro: dict | None) -> ComponenteScore:
+    if registro is None:
+        return ComponenteScore(variable=VARIABLE_DEFICIT_COMPUESTO, valor=None, origen=None, es_real=False, fiabilidad=None)
+    return ComponenteScore(
+        variable=VARIABLE_DEFICIT_COMPUESTO,
+        valor=registro["valor"],
+        origen=registro["origen"],
+        es_real=registro["es_real"],
+        fiabilidad=registro["fiabilidad"],
+    )
+
+
 async def calcular_zonas_score_privacion(anio: int, db: Session) -> list[PuntoZona]:
-    """Score de privacion proyectado (decision de producto, no
-    densidad_poblacional): acueducto y alcantarillado se proyectan por
-    RPC -- 2 llamadas EN PARALELO (asyncio.gather), no 3: deficit_
-    habitacional_cuantitativo NO se proyecta por regresion (viene de un
-    censo fijo, CNPV 2018, un solo punto real por municipio para
-    siempre -- ver techo360-proyeccion/app/services/proyeccion.py::
-    INDICADORES_SOPORTADOS). Para deficit se reutiliza, sin cambios, el
-    valor del año base 2024 (obtener_deficit_base) para TODOS los años
-    proyectados.
+    """Score de privacion proyectado (decision de producto, no densidad_poblacional).
+
+    Insumos (cada uno con su origen, es_real y fiabilidad; ver `componentes`):
+      * acueducto y alcantarillado: 2 RPC EN PARALELO a techo360-proyeccion
+        (calcular_zonas): fila de BD del año si existe (real o proyeccion-*), y si no,
+        el ULTIMO VALOR REAL observado como respaldo (es_real=False).
+      * deficit_habitacional_cuantitativo: la fila del AÑO PEDIDO si existe en BD; si
+        no, el valor congelado de 2024 con es_real=False (obtener_deficit_para_anio).
 
     Los 3 insumos se normalizan con los limites FIJOS del año base 2024
-    (_obtener_limites_base_cacheados), no con el min/max del propio año
-    proyectado -- asi el score proyectado queda en la MISMA escala que
-    el score real de 2024 (ver ANIO_BASE_SCORE arriba para el porque).
+    (_obtener_limites_base_cacheados), no con el min/max del año proyectado -- asi el
+    score proyectado queda en la MISMA escala que el score real de 2024.
 
-    Si falla CUALQUIERA de las 2 llamadas RPC (acueducto o
-    alcantarillado) -- incluyendo ProyeccionTimeoutError por cache frio
-    en techo360-proyeccion -- se espera a que ambas terminen
-    (return_exceptions=True) y se relanza el primer error encontrado:
-    nunca se cachea ni se devuelve un score a medias con solo uno de los
-    dos insumos proyectados."""
+    es_real del score = True SOLO si los tres insumos son reales (y el score existe).
+    fiabilidad del score = el MINIMO de las fiabilidades de sus componentes. Si falta
+    cualquier insumo, valor=None, es_real=False, fiabilidad=None.
+
+    Si falla CUALQUIERA de las 2 llamadas RPC se espera a que ambas terminen
+    (return_exceptions=True) y se relanza el primer error: nunca se cachea ni se
+    devuelve un score a medias con solo uno de los dos insumos."""
     limites = await _obtener_limites_base_cacheados(db)
-    deficit_base = await asyncio.to_thread(obtener_deficit_base, db, ANIO_BASE_SCORE)
+    deficit = await asyncio.to_thread(obtener_deficit_para_anio, db, anio, ANIO_BASE_SCORE)
 
     resultados = await asyncio.gather(
         calcular_zonas(VARIABLE_ACUEDUCTO, anio),
@@ -241,46 +286,50 @@ async def calcular_zonas_score_privacion(anio: int, db: Session) -> list[PuntoZo
     por_codigo_acueducto = {z.codigo_municipio: z for z in zonas_acueducto}
     por_codigo_alcantarillado = {z.codigo_municipio: z for z in zonas_alcantarillado}
 
-    # Union de codigos presentes en CUALQUIERA de los 2 resultados -- un
-    # municipio que aparezca en uno pero no en el otro entra igual (con
-    # valor=None, ver abajo); uno que no aparezca en NINGUNO de los 2
-    # (p.ej. sin dato real/regresable para ninguna de las 2 coberturas)
-    # queda fuera de la lista, mismo criterio que calcular_zonas().
+    # Union de codigos presentes en CUALQUIERA de los 2 resultados -- un municipio que
+    # aparezca en uno pero no en el otro entra igual (con valor=None); uno que no aparezca
+    # en NINGUNO queda fuera de la lista, mismo criterio que calcular_zonas().
     codigos = dict.fromkeys((*por_codigo_acueducto, *por_codigo_alcantarillado))
 
     zonas: list[PuntoZona] = []
     for codigo in codigos:
-        punto_acueducto = por_codigo_acueducto.get(codigo)
-        punto_alcantarillado = por_codigo_alcantarillado.get(codigo)
+        componentes = [
+            _componente(VARIABLE_ACUEDUCTO, por_codigo_acueducto.get(codigo)),
+            _componente(VARIABLE_ALCANTARILLADO, por_codigo_alcantarillado.get(codigo)),
+            _componente_deficit(deficit.get(codigo)),
+        ]
+        acueducto, alcantarillado, deficit_c = componentes
 
         indicadores_zona = {
             VARIABLE_ACUEDUCTO: {
-                "score_normalizado": normalizar_minmax(
-                    punto_acueducto.valor if punto_acueducto else None,
-                    *limites.get(VARIABLE_ACUEDUCTO, (None, None)),
-                )
+                "score_normalizado": normalizar_minmax(acueducto.valor, *limites.get(VARIABLE_ACUEDUCTO, (None, None)))
             },
             VARIABLE_ALCANTARILLADO: {
-                "score_normalizado": normalizar_minmax(
-                    punto_alcantarillado.valor if punto_alcantarillado else None,
-                    *limites.get(VARIABLE_ALCANTARILLADO, (None, None)),
-                )
+                "score_normalizado": normalizar_minmax(alcantarillado.valor, *limites.get(VARIABLE_ALCANTARILLADO, (None, None)))
             },
             VARIABLE_DEFICIT_COMPUESTO: {
-                "score_normalizado": normalizar_minmax(
-                    deficit_base.get(codigo),
-                    *limites.get(VARIABLE_DEFICIT_COMPUESTO, (None, None)),
-                )
+                "score_normalizado": normalizar_minmax(deficit_c.valor, *limites.get(VARIABLE_DEFICIT_COMPUESTO, (None, None)))
             },
         }
         score = calcular_score_privacion(indicadores_zona)
 
-        es_real = bool(
-            punto_acueducto
-            and punto_alcantarillado
-            and punto_acueducto.es_real
-            and punto_alcantarillado.es_real
+        if score is None:
+            es_real = False
+            fiabilidad = None
+            origen = None
+        else:
+            es_real = all(c.es_real for c in componentes)
+            fiabilidad = min(c.fiabilidad for c in componentes)
+            origen = ORIGEN_SCORE_REAL if es_real else ORIGEN_SCORE_PROYECTADO
+        zonas.append(
+            PuntoZona(
+                codigo_municipio=codigo,
+                valor=score,
+                es_real=es_real,
+                origen=origen,
+                fiabilidad=fiabilidad,
+                componentes=componentes,
+            )
         )
-        zonas.append(PuntoZona(codigo_municipio=codigo, valor=score, es_real=es_real))
 
     return zonas

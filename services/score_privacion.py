@@ -21,6 +21,8 @@ cambiar su contrato/comportamiento para el camino real.
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from services.origen import es_real, fiabilidad_de_origen
+
 VARIABLE_ACUEDUCTO = "cobertura_acueducto"
 VARIABLE_ALCANTARILLADO = "cobertura_alcantarillado"
 VARIABLE_DEFICIT_COMPUESTO = "deficit_habitacional_cuantitativo"
@@ -127,3 +129,54 @@ def obtener_deficit_base(db: Session, anio_base: int) -> dict[str, float | None]
         fila["codigodivipola"]: (float(fila["valuevar"]) if fila["valuevar"] is not None else None)
         for fila in filas
     }
+
+
+def obtener_deficit_para_anio(db: Session, anio: int, anio_base: int) -> dict[str, dict]:
+    """Insumo de deficit_habitacional_cuantitativo del score para el año pedido, por
+    municipio, con su procedencia:
+
+      * si existe fila para `anio` (de cualquier origen) se usa ESA fila y es_real =
+        es_real(origen) (un deficit con origen proyeccion-* sale como proyeccion);
+      * si no existe, se usa el valor congelado del año base (2024) y es_real=False
+        SIEMPRE (es un valor repetido, no una observacion de ese año).
+
+    Devuelve {codigo: {"valor", "origen", "es_real", "fiabilidad", "anio_fuente"}}.
+    obtener_deficit_base() queda para quien solo necesite el valor congelado."""
+    query = text("""
+        SELECT codigodivipola, yearm, valuevar, originvar, intervaloconfianza
+        FROM public.mapcalordb
+        WHERE namevar = :variable
+          AND yearm = ANY(:anios)
+          AND codigodivipola IS NOT NULL
+          AND codigodivipola != :codigo_agregado_nacional
+          AND valuevar IS NOT NULL
+    """)
+    filas = db.execute(
+        query,
+        {
+            "variable": VARIABLE_DEFICIT_COMPUESTO,
+            "anios": sorted({anio, anio_base}),
+            "codigo_agregado_nacional": CODIGO_AGREGADO_NACIONAL_TERRIDATA,
+        },
+    ).mappings().all()
+
+    del_anio: dict[str, dict] = {}
+    del_base: dict[str, dict] = {}
+    for fila in filas:
+        origen = fila["originvar"]
+        intervalo = float(fila["intervaloconfianza"]) if fila["intervaloconfianza"] is not None else None
+        registro = {
+            "valor": float(fila["valuevar"]),
+            "origen": origen,
+            "es_real": es_real(origen),
+            "fiabilidad": fiabilidad_de_origen(origen, intervalo),
+            "anio_fuente": int(fila["yearm"]),
+        }
+        if int(fila["yearm"]) == anio:
+            del_anio[fila["codigodivipola"]] = registro
+        if int(fila["yearm"]) == anio_base:
+            del_base[fila["codigodivipola"]] = {**registro, "es_real": False}
+
+    resultado = dict(del_base)
+    resultado.update(del_anio)
+    return resultado
