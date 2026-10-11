@@ -1,6 +1,6 @@
 import asyncio
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Response
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
@@ -23,12 +23,7 @@ from schemas.chatbot import (
     MensajeResponse,
 )
 from services import chatbot_estados, chatbot_service
-from services.chatbot_rpc_client import (
-    ChatbotTimeoutError,
-    avisar_cancelacion,
-    solicitar_chatbot,
-)
-from services.rate_limiter import verificar_limite
+from services.chatbot_rpc_client import ChatbotTimeoutError, avisar_cancelacion, solicitar_chatbot
 
 router = APIRouter(
     prefix="/chatbot",
@@ -182,8 +177,6 @@ def listar_mensajes(
 )
 async def enviar_mensaje(
     conversacion_id: str,
-    request: Request,
-    conversacion_id: int,
     datos: EnviarMensajeRequest,
     db: Session = Depends(get_db_vector),
     # Misma sesion que usa get_current_user (FastAPI cachea la dependencia por peticion):
@@ -192,28 +185,8 @@ async def enviar_mensaje(
     current_user: MapCalorUser = Depends(get_current_user),
 ):
     conversacion = chatbot_service.resolver_conversacion(db, conversacion_id, current_user.id)
-   await verificar_limite(
-    request=request,
-    ambito="chatbot_mensajes",
-    identificador=str(current_user.id),
-    limite=20,
-    ventana_segundos=60,
-)
-
-conversacion = (
-    db.query(Conversacion)
-    .filter(
-        Conversacion.id == conversacion_id,
-        Conversacion.usuario_id == current_user.id,
-    )
-    .first()
-)
-
-if conversacion is None:
-    raise HTTPException(
-        status_code=404,
-        detail="Conversacion no encontrada.",
-    )
+    if conversacion is None:
+        raise HTTPException(status_code=404, detail="Conversacion no encontrada.")
 
     # Fase C: con CHATBOT_BLOQUEO_PENDIENTES=true el mensaje pasa por la maquina de
     # estados (pendiente -> procesando -> respondido/error) y una conversacion con
