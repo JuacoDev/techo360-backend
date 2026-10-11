@@ -1,12 +1,15 @@
 import asyncio
+import logging
 
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from schemas.proyecciones import ComponenteScore, PuntoProyeccion, PuntoZona
 from services.proyeccion_cache import proyeccion_cache
 from services.proyeccion_rpc_client import solicitar_proyeccion
-from services.origen import FIABILIDAD_DATO_REAL, FIABILIDAD_MINIMA
+from services.origen import FIABILIDAD_DATO_REAL, FIABILIDAD_MINIMA, es_real, fiabilidad_de_origen
 from services.score_privacion import (
+    CODIGOS_FUERA_DEL_UNIVERSO,
     VARIABLE_ACUEDUCTO,
     VARIABLE_ALCANTARILLADO,
     VARIABLE_DEFICIT_COMPUESTO,
@@ -16,6 +19,8 @@ from services.score_privacion import (
     obtener_deficit_para_anio,
 )
 
+
+logger = logging.getLogger(__name__)
 
 INDICADOR_VIGENTE = "densidad_poblacional"
 
@@ -90,7 +95,28 @@ ORIGEN_SCORE_PROYECTADO = "proyeccion-score-privacion"
 ORIGEN_SCORE_REAL = "score-privacion"
 
 
+# Indicadores que /api/proyecciones/zonas y /serie sirven LEYENDO las filas ya materializadas de
+# mapcalordb (2024-2042, cargadas con la carga M4): sin RPC, sin regresion y sin respaldo. Los
+# nombres son los nameVar exactos de la tabla. densidad_poblacional y score_privacion conservan
+# su camino anterior.
+INDICADORES_MATERIALIZADOS = frozenset({
+    VARIABLE_ACUEDUCTO,
+    VARIABLE_ALCANTARILLADO,
+    VARIABLE_DEFICIT_COMPUESTO,  # deficit_habitacional_cuantitativo
+    "deficit_habitacional_cualitativo",
+    "deficit_habitacional_total",
+    "tenencia_informal_terrenos",
+})
+MODELO_MATERIALIZADO = "valores-materializados-mapcalordb"
+ORIGEN_MATERIALIZADO = "mapcalordb"
+
+# /serie de un indicador materializado: desde 2024 (ancla observada) hasta ANIO_MAXIMO_ZONAS.
+ANIO_MINIMO_SERIE_MATERIALIZADA = 2024
+
+
 def modelo_de_zonas(indicador: str) -> str:
+    if indicador in INDICADORES_MATERIALIZADOS:
+        return MODELO_MATERIALIZADO
     return MODELO_SCORE_PRIVACION if indicador == INDICADOR_SCORE_PRIVACION else MODELO_VIGENTE
 
 # >>> Rango real cargado para densidad_poblacional (confirmado 28-sep-2026
@@ -205,6 +231,98 @@ async def calcular_zonas(indicador: str, anio: int) -> list[PuntoZona]:
         )
         for zona in respuesta["zonas"]
     ]
+
+
+def _valor_valido(valor) -> bool:
+    return valor is not None and valor == valor  # None y NaN: dato faltante
+
+
+def leer_zonas_materializadas(indicador: str, anio: int, db: Session) -> list[PuntoZona]:
+    """Un SELECT: la fila de (indicador, año) de cada municipio del universo (zonas_municipio sin
+    00000/01001). Sin regresion ni respaldo: el municipio sin fila (o con valor NULL) se OMITE de la
+    respuesta y se registra en el log. es_real/fiabilidad salen de los helpers de services.origen."""
+    if indicador not in INDICADORES_MATERIALIZADOS:
+        raise IndicadorNoSoportadoError(f"Indicador no materializado: {indicador}.")
+    filas = db.execute(
+        text("""
+            SELECT m.codigodivipola, m.valuevar, m.originvar, m.intervaloconfianza
+            FROM public.mapcalordb m
+            JOIN public.zonas_municipio z ON z.codigo_municipio = m.codigodivipola
+            WHERE m.namevar = :indicador AND m.yearm = :anio AND z.codigo_municipio <> ALL(:excluidos)
+            ORDER BY m.codigodivipola
+        """),
+        {"indicador": indicador, "anio": anio, "excluidos": list(CODIGOS_FUERA_DEL_UNIVERSO)},
+    ).mappings().all()
+
+    zonas: list[PuntoZona] = []
+    omitidas = 0
+    for fila in filas:
+        if not _valor_valido(fila["valuevar"]):
+            omitidas += 1
+            continue
+        origen = fila["originvar"]
+        zonas.append(
+            PuntoZona(
+                codigo_municipio=fila["codigodivipola"],
+                valor=float(fila["valuevar"]),
+                es_real=es_real(origen),
+                origen=origen,
+                fiabilidad=fiabilidad_de_origen(origen, fila["intervaloconfianza"]),
+            )
+        )
+    if omitidas:
+        logger.warning("zonas materializadas %s/%s: %d filas con valor NULL omitidas", indicador, anio, omitidas)
+    return zonas
+
+
+async def calcular_zonas_materializadas(indicador: str, anio: int, db: Session) -> list[PuntoZona]:
+    # La consulta es sincrona (Session de SQLAlchemy): to_thread no bloquea el loop de eventos.
+    return await asyncio.to_thread(leer_zonas_materializadas, indicador, anio, db)
+
+
+def leer_serie_materializada(codigo_municipio: str, indicador: str, desde: int, hasta: int, db: Session) -> list[PuntoProyeccion]:
+    """Un SELECT por (municipio, indicador): las filas de [desde, hasta] ordenadas por año. Sin
+    regresion ni respaldo: un año sin fila se omite (log). Municipio sin ninguna fila -> LookupError (404)."""
+    if indicador not in INDICADORES_MATERIALIZADOS:
+        raise IndicadorNoSoportadoError(f"Indicador no materializado: {indicador}.")
+    if desde > hasta:
+        raise RangoProyeccionInvalidoError("El año inicial no puede ser mayor que el año final.")
+    if desde < ANIO_MINIMO_SERIE_MATERIALIZADA or hasta > ANIO_MAXIMO_ZONAS:
+        raise RangoProyeccionInvalidoError(
+            f"Para {indicador} el rango valido es {ANIO_MINIMO_SERIE_MATERIALIZADA}-{ANIO_MAXIMO_ZONAS}."
+        )
+    filas = db.execute(
+        text("""
+            SELECT yearm, valuevar, originvar, intervaloconfianza
+            FROM public.mapcalordb
+            WHERE codigodivipola = :codigo AND namevar = :indicador AND yearm BETWEEN :desde AND :hasta
+            ORDER BY yearm
+        """),
+        {"codigo": codigo_municipio, "indicador": indicador, "desde": desde, "hasta": hasta},
+    ).mappings().all()
+
+    serie = [
+        PuntoProyeccion(
+            anio=int(f["yearm"]),
+            valor=round(float(f["valuevar"]), 2),
+            es_real=es_real(f["originvar"]),
+            origen=f["originvar"],
+            fiabilidad=fiabilidad_de_origen(f["originvar"], f["intervaloconfianza"]),
+        )
+        for f in filas
+        if _valor_valido(f["valuevar"])
+    ]
+    if not serie:
+        raise LookupError(f"No hay datos de {indicador} para el municipio {codigo_municipio}.")
+    if len(serie) < hasta - desde + 1:
+        logger.warning("serie materializada %s/%s: %d de %d años", indicador, codigo_municipio, len(serie), hasta - desde + 1)
+    return serie
+
+
+async def calcular_serie_materializada(
+    codigo_municipio: str, indicador: str, desde: int, hasta: int, db: Session
+) -> list[PuntoProyeccion]:
+    return await asyncio.to_thread(leer_serie_materializada, codigo_municipio, indicador, desde, hasta, db)
 
 
 async def _obtener_limites_base_cacheados(db: Session) -> dict:

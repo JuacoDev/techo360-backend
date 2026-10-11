@@ -4,6 +4,11 @@ from pydantic import BaseModel
 class PuntoProyeccion(BaseModel):
     anio: int
     valor: float
+    # Solo en las series leidas de mapcalordb (indicadores materializados); la serie de
+    # densidad_poblacional (RPC) no los trae y /serie los omite cuando son None.
+    es_real: bool | None = None
+    origen: str | None = None
+    fiabilidad: float | None = None
 
 
 class ProyeccionResponse(BaseModel):
