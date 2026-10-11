@@ -69,7 +69,6 @@ async def iniciar_pipeline_datos():
         )
 
     redis_client = aioredis.from_url(settings.redis_url, decode_responses=True)
-    app.state.redis_client = redis_client
     iniciar_scheduler(redis_client, settings.database_url, notificar_admin)
 
     # T-97 (rediseño): primer consumer de RabbitMQ que corre el backend
@@ -112,4 +111,3 @@ async def cerrar_conexiones():
     conexion = getattr(app.state, "conexion_persistencia_chatbot", None)
     if conexion is not None:
         await conexion.close()
-

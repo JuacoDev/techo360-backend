@@ -91,17 +91,16 @@ async def request_otp(payload: RequestOTPRequest, request: Request):
             ip=_obtener_ip_cliente(request),
         )
 
-       except OTPRateLimitError as e:
+    except OTPRateLimitError as e:
         raise HTTPException(
             status_code=429,
-            detail=str(e),
-            headers={"Retry-After": str(max(e.seconds_remaining, 1))},
+            detail=str(e)
         )
+
     except OTPCooldownError as e:
         raise HTTPException(
             status_code=429,
-            detail=str(e),
-            headers={"Retry-After": str(max(e.seconds_remaining, 1))},
+            detail=str(e)
         )
 
     except OTPEmailLimitError as e:

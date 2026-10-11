@@ -1,8 +1,5 @@
-from fastapi import APIRouter
-from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-
-from services.rabbitmq_health import consultar_estado_rabbitmq
+from fastapi import APIRouter
 
 
 router = APIRouter()
@@ -13,35 +10,32 @@ class RootResponse(BaseModel):
     service: str
 
 
+class HealthResponse(BaseModel):
+    status: str
+
+
 @router.get(
     "/",
     response_model=RootResponse,
+    status_code=200,
     summary="Verificar funcionamiento del backend",
+    description="Comprueba que el backend de Techo 360 se encuentre funcionando correctamente."
 )
 def root():
     return {
         "status": "ok",
-        "service": "backend",
+        "service": "backend"
     }
 
 
 @router.get(
     "/health",
-    summary="Verificar backend, RabbitMQ y consumers",
+    response_model=HealthResponse,
+    status_code=200,
+    summary="Verificar estado del servicio",
+    description="Comprueba el estado actual del servicio backend."
 )
-async def health():
-    estado = await consultar_estado_rabbitmq()
-
-    if not estado["healthy"]:
-        return JSONResponse(
-            status_code=503,
-            content={
-                "status": "unhealthy",
-                **estado,
-            },
-        )
-
+def health():
     return {
-        "status": "healthy",
-        **estado,
+        "status": "healthy"
     }
