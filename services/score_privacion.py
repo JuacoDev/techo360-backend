@@ -37,12 +37,19 @@ CODIGO_AGREGADO_NACIONAL_TERRIDATA = "01001"
 
 
 def normalizar_minmax(valor: float | None, minimo: float | None, maximo: float | None) -> float | None:
-    """Normalizacion min-max a [0, 1]. None si falta cualquier insumo o
+    """Normalizacion min-max, RECORTADA a [0, 1]. None si falta cualquier insumo o
     si el rango es degenerado (todas las filas con el mismo valor -- no
-    hay forma de normalizar sin inventar un 0 u 1 arbitrario)."""
+    hay forma de normalizar sin inventar un 0 u 1 arbitrario).
+
+    El recorte (2026-10-10) importa en el camino de proyeccion: los limites son los
+    FIJOS de 2024 y un valor de otro año puede caer fuera de ese rango (p. ej. un
+    deficit proyectado por debajo del minimo de 2024 daba un normalizado < 0 y un
+    score < 0 en Sabaneta). En el camino real (limites del propio año) no cambia nada."""
     if valor is None or minimo is None or maximo is None or maximo == minimo:
         return None
-    return round((valor - minimo) / (maximo - minimo), 4)
+    if valor != valor:  # NaN: dato faltante, no un 0 (max(0.0, nan) devolveria 0.0 y lo ocultaria)
+        return None
+    return round(min(1.0, max(0.0, (valor - minimo) / (maximo - minimo))), 4)
 
 
 def calcular_score_privacion(indicadores_zona: dict) -> float | None:
@@ -62,12 +69,49 @@ def calcular_score_privacion(indicadores_zona: dict) -> float | None:
     if acueducto is None or alcantarillado is None or deficit is None:
         return None
 
-    return round((1 - acueducto) / 3 + (1 - alcantarillado) / 3 + deficit / 3, 4)
+    # Con los tres insumos ya en [0, 1] el score queda en [0, 1]; el recorte final solo
+    # protege contra el redondeo y contra un llamador que pase normalizados sin recortar.
+    return min(1.0, max(0.0, round((1 - acueducto) / 3 + (1 - alcantarillado) / 3 + deficit / 3, 4)))
+
+
+# Codigos que NO son municipios y no deben fijar la escala del score: "00000" (Area en
+# Litigio, poligono sin municipio) y "01001" (agregado nacional de TerriData).
+CODIGOS_FUERA_DEL_UNIVERSO = ("00000", CODIGO_AGREGADO_NACIONAL_TERRIDATA)
+
+
+def obtener_codigos_universo(db: Session) -> set[str]:
+    """Codigos de los municipios REALES del mapa: los de zonas_municipio sin 00000/01001
+    (1,104 hoy). Excluye los 18-19 codigos huerfanos de areas no municipalizadas
+    (91263, 94883, 97511...), que tienen filas de deficit en mapcalordb pero ningun poligono."""
+    filas = db.execute(
+        text("SELECT codigo_municipio FROM public.zonas_municipio WHERE codigo_municipio <> ALL(:excluidos)"),
+        {"excluidos": list(CODIGOS_FUERA_DEL_UNIVERSO)},
+    ).all()
+    return {fila[0] for fila in filas}
+
+
+def calcular_limites_desde_filas(filas, codigos_universo: set[str]) -> dict[str, tuple[float | None, float | None]]:
+    """Min/max de cada variable del score SOLO sobre los municipios de `codigos_universo`.
+    `filas`: iterable de {"codigodivipola", "namevar", "valuevar"} (cualquier origen: aqui no
+    se decide que filas se leen, solo sobre que municipios se calcula la escala)."""
+    valores_por_variable: dict[str, list[float]] = {v: [] for v in VARIABLES_SCORE}
+    for fila in filas:
+        if fila["valuevar"] is None or fila["codigodivipola"] not in codigos_universo:
+            continue
+        if fila["namevar"] in valores_por_variable:
+            valores_por_variable[fila["namevar"]].append(float(fila["valuevar"]))
+    return {
+        variable: (min(valores), max(valores)) if valores else (None, None)
+        for variable, valores in valores_por_variable.items()
+    }
 
 
 def calcular_limites_base(db: Session, anio_base: int) -> dict[str, tuple[float | None, float | None]]:
-    """Min/max de cada una de las 3 variables del score, sobre TODAS las
-    filas reales de `anio_base` (sin paginar ni filtrar) -- mismo patron
+    """Min/max de cada una de las 3 variables del score, sobre las filas de
+    `anio_base` (de cualquier origen) de los MUNICIPIOS del universo -- los de
+    zonas_municipio sin 00000/01001; los codigos huerfanos de areas no municipalizadas
+    NO fijan la escala (16 de ellos tenian el deficit cuantitativo saturado en 100 y
+    mantenian el maximo en 100 aunque ningun municipio llegara a ese valor). Mismo patron
     que el min-max dinamico de routers/zonas.py, pero fijado a un solo
     año en vez de recalcularse por request. Se llama una sola vez (ver
     services/proyeccion_cache.py::obtener_limites_base/guardar_limites_base
@@ -75,7 +119,7 @@ def calcular_limites_base(db: Session, anio_base: int) -> dict[str, tuple[float 
     años proyectados, de forma que el score proyectado y el score real
     del año base queden en la MISMA escala."""
     query = text("""
-        SELECT namevar, valuevar
+        SELECT codigodivipola, namevar, valuevar
         FROM public.mapcalordb
         WHERE yearm = :anio
           AND namevar = ANY(:variables)
@@ -91,15 +135,7 @@ def calcular_limites_base(db: Session, anio_base: int) -> dict[str, tuple[float 
         },
     ).mappings().all()
 
-    valores_por_variable: dict[str, list[float]] = {v: [] for v in VARIABLES_SCORE}
-    for fila in filas:
-        if fila["valuevar"] is not None:
-            valores_por_variable[fila["namevar"]].append(float(fila["valuevar"]))
-
-    return {
-        variable: (min(valores), max(valores)) if valores else (None, None)
-        for variable, valores in valores_por_variable.items()
-    }
+    return calcular_limites_desde_filas(filas, obtener_codigos_universo(db))
 
 
 def obtener_deficit_base(db: Session, anio_base: int) -> dict[str, float | None]:

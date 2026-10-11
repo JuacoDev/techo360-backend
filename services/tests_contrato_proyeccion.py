@@ -21,7 +21,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from schemas.proyecciones import ComponenteScore, PuntoZona
 from services import proyeccion_service as servicio
 from services.origen import FIABILIDAD_DATO_REAL, FIABILIDAD_MINIMA, es_proyeccion, es_real, fiabilidad_de_origen
-from services.proyeccion_cache import ProyeccionCache, VERSION_ZONAS
+from services.proyeccion_cache import ProyeccionCache, VERSION_LIMITES, VERSION_ZONAS
 from services.score_privacion import obtener_deficit_para_anio
 
 LIMITES = {
@@ -89,8 +89,9 @@ class TestClavesDeCache(unittest.TestCase):
     def test_ya_no_se_lee_el_prefijo_viejo(self):
         self.assertNotIn(":v2:zonas:", ProyeccionCache._clave_zonas("densidad_poblacional", 2027))
 
-    def test_claves_sin_cambio_de_contenido_conservan_prefijo(self):
-        self.assertEqual(ProyeccionCache._clave_limites_base(2024), "proyeccion:v2:limites_base:2024")
+    def test_claves_sin_cambio_de_contenido_conservan_prefijo(self):  # serie; limites_base paso a v3
+        # limites_base SI cambio de contenido el 2026-10-10 (min-max solo sobre el universo): v3
+        self.assertEqual(ProyeccionCache._clave_limites_base(2024), "proyeccion:v3:limites_base:2024")
         self.assertEqual(ProyeccionCache._clave_serie("05001", 2027, 2030), "proyeccion:serie:05001:2027:2030")
 
 
@@ -232,16 +233,19 @@ class TestScriptDeLimpiezaDeCache(unittest.TestCase):
         spec.loader.exec_module(modulo)
 
         cliente = MagicMock()
-        cliente.scan_iter.return_value = iter(["proyeccion:v2:zonas:score_privacion:2027", "proyeccion:v2:zonas:densidad_poblacional:2030"])
+        cliente.scan_iter.side_effect = [
+            iter(["proyeccion:v2:zonas:score_privacion:2027", "proyeccion:v2:zonas:densidad_poblacional:2030"]),
+            iter(["proyeccion:v2:limites_base:2024"]),
+        ]
         encontradas, borradas = modulo.limpiar(cliente, version="v2", ejecutar=False)
-        self.assertEqual(len(encontradas), 2)
+        self.assertEqual(len(encontradas), 3)
         self.assertEqual(borradas, 0)
         cliente.delete.assert_not_called()
-        cliente.scan_iter.assert_called_once()
-        self.assertEqual(cliente.scan_iter.call_args.kwargs["match"], "proyeccion:v2:zonas:*")
+        self.assertEqual([c.kwargs["match"] for c in cliente.scan_iter.call_args_list],
+                         ["proyeccion:v2:zonas:*", "proyeccion:v2:limites_base:*"])
 
         cliente2 = MagicMock()
-        cliente2.scan_iter.return_value = iter(["proyeccion:v2:zonas:score_privacion:2027"])
+        cliente2.scan_iter.side_effect = [iter(["proyeccion:v2:zonas:score_privacion:2027"]), iter([])]
         cliente2.delete.return_value = 1
         _, borradas2 = modulo.limpiar(cliente2, version="v2", ejecutar=True)
         self.assertEqual(borradas2, 1)
@@ -253,8 +257,9 @@ class TestScriptDeLimpiezaDeCache(unittest.TestCase):
         spec = importlib.util.spec_from_file_location("limpiar_cache_proyeccion", ruta)
         modulo = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(modulo)
-        with self.assertRaises(ValueError):
-            modulo.limpiar(MagicMock(), version=VERSION_ZONAS, ejecutar=True)
+        for vigente in (VERSION_ZONAS, VERSION_LIMITES):
+            with self.assertRaises(ValueError):
+                modulo.limpiar(MagicMock(), version=vigente, ejecutar=True)
 
 
 if __name__ == "__main__":

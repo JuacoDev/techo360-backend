@@ -8,7 +8,7 @@ from db.session import get_db
 from models.mapcalor_user import MapCalorUser
 from routers.auth import get_current_user
 from schemas.zonas import GeoJSONFeatureCollection
-from services.score_privacion import calcular_score_privacion, normalizar_minmax
+from services.score_privacion import calcular_score_privacion, normalizar_minmax, obtener_codigos_universo
 from services.zonas_cache import resolver, zonas_cache
 
 
@@ -285,9 +285,14 @@ def _construir_zonas(nivel: str, anio: int, db: Session) -> dict:
             # MpCodigo=00000 no tiene fila aqui (mapcalordb no tiene
             # datos para ese codigo), asi que queda fuera del min-max
             # de forma natural, sin caso especial.
+            # El min-max se calcula SOLO sobre los municipios que el mapa dibuja (zonas_municipio
+            # sin 00000): los codigos huerfanos de areas no municipalizadas tienen filas de deficit
+            # pero ningun poligono, y no deben fijar la escala (2026-10-10). Las filas que se leen
+            # no cambian; solo sobre cuales se calcula.
+            codigos_universo = {zona["codigo"] for zona in resultados}
             valores_por_variable: dict[str, list[float]] = {v: [] for v in VARIABLES_INDICADORES}
             for fila in filas_indicadores:
-                if fila["valuevar"] is not None:
+                if fila["valuevar"] is not None and fila["codigodivipola"] in codigos_universo:
                     valores_por_variable[fila["namevar"]].append(float(fila["valuevar"]))
 
             minmax_por_variable: dict[str, tuple[float | None, float | None]] = {
@@ -373,9 +378,10 @@ def _construir_zonas(nivel: str, anio: int, db: Session) -> dict:
                 },
             ).mappings().all()
 
+            codigos_universo = obtener_codigos_universo(db)  # misma regla que el nivel municipio
             valores_por_variable_score: dict[str, list[float]] = {v: [] for v in VARIABLES_INDICADORES}
             for fila in filas_indicadores_score:
-                if fila["valuevar"] is not None:
+                if fila["valuevar"] is not None and fila["codigodivipola"] in codigos_universo:
                     valores_por_variable_score[fila["namevar"]].append(float(fila["valuevar"]))
             minmax_por_variable_score: dict[str, tuple[float | None, float | None]] = {
                 variable: (min(valores), max(valores)) if valores else (None, None)

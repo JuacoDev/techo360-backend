@@ -7,8 +7,11 @@ fiabilidad, componentes; es_real = "no es proyeccion-*"), y la clave paso de
 entradas quedan sin uso y expiran solas por TTL (36 h). Este script existe para borrarlas
 antes si se quiere liberar la memoria ya, o si algo las lee por error.
 
-NO toca: proyeccion:v2:limites_base:* (mismo contenido), proyeccion:serie:* ni zonas:v1:*
-(cache de GET /api/zonas, cuyo contenido no cambio).
+Tambien borra proyeccion:{version}:limites_base:* (los limites min-max de 2024 cambiaron de
+contenido el 2026-10-10: ahora solo sobre los municipios del universo; la v2 tiene la escala vieja).
+
+NO toca: proyeccion:serie:* ni zonas:v1:* (cache de GET /api/zonas: su contrato no cambio y, con
+los datos actuales, tampoco sus valores; al cargar datos nuevos se invalida con invalidar_cache_zonas).
 
 POR DEFECTO SOLO LISTA (dry-run). Para borrar hay que pasar --ejecutar. No se ejecuta
 en produccion sin autorizacion de Juan.
@@ -25,12 +28,13 @@ VERSION_VIEJA_POR_DEFECTO = "v2"
 
 def limpiar(cliente, version: str = VERSION_VIEJA_POR_DEFECTO, ejecutar: bool = False):
     """Devuelve (claves_encontradas, cantidad_borrada). Usa SCAN (no KEYS: no bloquea Redis)."""
-    from services.proyeccion_cache import VERSION_ZONAS  # import tardio: solo para la guarda
+    from services.proyeccion_cache import VERSION_LIMITES, VERSION_ZONAS  # import tardio: solo para la guarda
 
-    if version == VERSION_ZONAS:
-        raise ValueError(f"'{version}' es la version VIGENTE de zonas; no se borra.")
-    patron = f"proyeccion:{version}:zonas:*"
-    encontradas = list(cliente.scan_iter(match=patron, count=100))
+    if version in (VERSION_ZONAS, VERSION_LIMITES):
+        raise ValueError(f"'{version}' es una version VIGENTE (zonas={VERSION_ZONAS}, limites={VERSION_LIMITES}); no se borra.")
+    encontradas = []
+    for patron in (f"proyeccion:{version}:zonas:*", f"proyeccion:{version}:limites_base:*"):
+        encontradas.extend(cliente.scan_iter(match=patron, count=100))
     borradas = 0
     if ejecutar:
         for clave in encontradas:

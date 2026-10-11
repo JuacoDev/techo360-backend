@@ -18,6 +18,11 @@ TTL_SEGUNDOS = 36 * 60 * 60
 # TODAS las entradas de zonas sin tocar Redis a mano.
 VERSION_ZONAS = "v3"
 
+# Los limites min-max de 2024 cambiaron de CONTENIDO el 2026-10-10 (ahora solo sobre los municipios
+# del universo, sin los codigos huerfanos): las entradas `proyeccion:v2:limites_base:*` que siguen
+# vivas en produccion (TTL 36 h) tienen la escala vieja y no deben leerse.
+VERSION_LIMITES = "v3"
+
 
 class ProyeccionCache:
     """Cache de las respuestas COMPLETAS de T-104/T-105 (no de cada
@@ -42,8 +47,9 @@ class ProyeccionCache:
     significa "no es proyeccion-*" (antes: "hay una fila no proyectada"). Las
     entradas `proyeccion:v2:zonas:*` que siguen vivas en produccion (TTL hasta 36 h)
     tienen el contrato VIEJO: reusar el prefijo v2 las serviria tal cual. Por eso zonas
-    pasa a `proyeccion:v3:zonas:`. Las claves de limites_base (`v2`) y de serie
-    (`proyeccion:serie:`) NO cambian de contenido y conservan su prefijo.
+    pasa a `proyeccion:v3:zonas:`. Las claves de serie (`proyeccion:serie:`) NO cambian de
+    contenido y conservan su prefijo. limites_base pasa tambien a `v3` (cambio de CONTENIDO:
+    min-max solo sobre el universo de municipios, ver VERSION_LIMITES).
     scripts/limpiar_cache_proyeccion.py borra las v2 de zonas si se quiere no esperar
     al TTL (por defecto solo lista; no se ejecuta en produccion sin autorizacion)."""
 
@@ -60,7 +66,7 @@ class ProyeccionCache:
 
     @staticmethod
     def _clave_limites_base(anio_base: int) -> str:
-        return f"proyeccion:v2:limites_base:{anio_base}"
+        return f"proyeccion:{VERSION_LIMITES}:limites_base:{anio_base}"
 
     async def obtener_zonas(self, indicador: str, anio: int) -> list[dict] | None:
         crudo = await self._redis.get(self._clave_zonas(indicador, anio))
