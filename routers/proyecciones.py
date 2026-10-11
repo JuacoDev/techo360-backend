@@ -20,12 +20,17 @@ from services.proyeccion_service import (
     INDICADOR_SCORE_PRIVACION,
     IndicadorNoSoportadoError,
     INDICADOR_VIGENTE,
+    INDICADORES_MATERIALIZADOS,
+    MODELO_MATERIALIZADO,
     MODELO_VIGENTE,
+    ORIGEN_MATERIALIZADO,
     ORIGEN_PROYECCION,
     ModeloNoDisponibleError,
     RangoProyeccionInvalidoError,
     calcular_proyeccion,
+    calcular_serie_materializada,
     calcular_zonas,
+    calcular_zonas_materializadas,
     calcular_zonas_score_privacion,
     modelo_de_zonas,
 )
@@ -35,6 +40,11 @@ router = APIRouter(
     prefix="/api/proyecciones",
     tags=["proyecciones"],
 )
+
+# Indicadores aceptados. densidad_poblacional y score_privacion conservan su camino (RPC /
+# calculo); los 6 de INDICADORES_MATERIALIZADOS se leen de mapcalordb (ver proyeccion_service).
+PATRON_INDICADOR_ZONAS = "^(" + "|".join([INDICADOR_VIGENTE, INDICADOR_SCORE_PRIVACION, *sorted(INDICADORES_MATERIALIZADOS)]) + ")$"
+PATRON_INDICADOR_SERIE = "^(" + "|".join([INDICADOR_VIGENTE, *sorted(INDICADORES_MATERIALIZADOS)]) + ")$"
 
 # >>> RESUELTO -- ya no bloqueante (verificado 28-sep-2026) <<<
 # Este endpoint (GET /api/proyecciones/serie, UN municipio) usaba a
@@ -55,6 +65,7 @@ router = APIRouter(
 @router.get(
     "/serie",
     response_model=ProyeccionResponse,
+    response_model_exclude_none=True,
     summary="Obtener proyección futura para un municipio",
     description=(
         "Calcula la serie futura de densidad_poblacional mediante "
@@ -82,8 +93,11 @@ async def obtener_proyeccion_municipio(
     ),
     indicador: str = Query(
         ...,
-        pattern=r"^densidad_poblacional$",
-        description="Indicador actualmente soportado.",
+        pattern=PATRON_INDICADOR_SERIE,
+        description=(
+            "densidad_poblacional (RPC) o uno de los 6 indicadores materializados en mapcalordb "
+            "(rango 2024-2042, cada punto con es_real/origen/fiabilidad)."
+        ),
     ),
     desde: int = Query(
         ...,
@@ -95,19 +109,24 @@ async def obtener_proyeccion_municipio(
         ge=1,
         description="Último año futuro solicitado.",
     ),
+    db: Session = Depends(get_db),
     current_user: MapCalorUser = Depends(get_current_user),
 ):
-    cacheado = await proyeccion_cache.obtener_serie(codigo_municipio, desde, hasta)
+    materializado = indicador in INDICADORES_MATERIALIZADOS
+    cacheado = await proyeccion_cache.obtener_serie(codigo_municipio, desde, hasta, indicador)
     if cacheado is not None:
         serie = [PuntoProyeccion(**punto) for punto in cacheado]
     else:
         try:
-            serie = await calcular_proyeccion(
-                codigo_municipio,
-                indicador,
-                desde,
-                hasta,
-            )
+            if materializado:
+                serie = await calcular_serie_materializada(codigo_municipio, indicador, desde, hasta, db)
+            else:
+                serie = await calcular_proyeccion(
+                    codigo_municipio,
+                    indicador,
+                    desde,
+                    hasta,
+                )
         except IndicadorNoSoportadoError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
         except RangoProyeccionInvalidoError as error:
@@ -120,14 +139,14 @@ async def obtener_proyeccion_municipio(
             raise HTTPException(status_code=503, detail=str(error)) from error
 
         await proyeccion_cache.guardar_serie(
-            codigo_municipio, desde, hasta, [punto.model_dump() for punto in serie]
+            codigo_municipio, desde, hasta, [punto.model_dump() for punto in serie], indicador
         )
 
     return {
         "codigo_municipio": codigo_municipio,
         "indicador": indicador,
-        "modelo": MODELO_VIGENTE,
-        "origen": ORIGEN_PROYECCION,
+        "modelo": MODELO_MATERIALIZADO if materializado else MODELO_VIGENTE,
+        "origen": ORIGEN_MATERIALIZADO if materializado else ORIGEN_PROYECCION,
         "serie": serie,
     }
 
@@ -175,8 +194,12 @@ async def obtener_zonas_proyeccion(
     ),
     indicador: str = Query(
         default=INDICADOR_VIGENTE,
-        pattern=r"^(densidad_poblacional|score_privacion)$",
-        description="Indicadores soportados: densidad_poblacional, score_privacion.",
+        pattern=PATRON_INDICADOR_ZONAS,
+        description=(
+            "densidad_poblacional, score_privacion o uno de los 6 indicadores materializados "
+            "(cobertura_acueducto, cobertura_alcantarillado, deficit_habitacional_cuantitativo, "
+            "deficit_habitacional_cualitativo, deficit_habitacional_total, tenencia_informal_terrenos)."
+        ),
     ),
     db: Session = Depends(get_db),
     current_user: MapCalorUser = Depends(get_current_user),
@@ -188,6 +211,8 @@ async def obtener_zonas_proyeccion(
         try:
             if indicador == INDICADOR_SCORE_PRIVACION:
                 zonas = await calcular_zonas_score_privacion(anio, db)
+            elif indicador in INDICADORES_MATERIALIZADOS:
+                zonas = await calcular_zonas_materializadas(indicador, anio, db)
             else:
                 zonas = await calcular_zonas(indicador, anio)
         except IndicadorNoSoportadoError as error:

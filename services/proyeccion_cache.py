@@ -23,6 +23,9 @@ VERSION_ZONAS = "v3"
 # vivas en produccion (TTL 36 h) tienen la escala vieja y no deben leerse.
 VERSION_LIMITES = "v3"
 
+# Unico indicador de /serie que viaja por RPC; su clave de serie no cambia.
+INDICADOR_SERIE_RPC = "densidad_poblacional"
+
 
 class ProyeccionCache:
     """Cache de las respuestas COMPLETAS de T-104/T-105 (no de cada
@@ -61,8 +64,12 @@ class ProyeccionCache:
         return f"proyeccion:{VERSION_ZONAS}:zonas:{indicador}:{anio}"
 
     @staticmethod
-    def _clave_serie(codigo_municipio: str, desde: int, hasta: int) -> str:
-        return f"proyeccion:serie:{codigo_municipio}:{desde}:{hasta}"
+    def _clave_serie(codigo_municipio: str, desde: int, hasta: int, indicador: str = INDICADOR_SERIE_RPC) -> str:
+        # densidad_poblacional conserva la clave de siempre (mismo contenido); los demas
+        # indicadores llevan el indicador DENTRO de la clave (v3), para no mezclar series.
+        if indicador == INDICADOR_SERIE_RPC:
+            return f"proyeccion:serie:{codigo_municipio}:{desde}:{hasta}"
+        return f"proyeccion:{VERSION_ZONAS}:serie:{indicador}:{codigo_municipio}:{desde}:{hasta}"
 
     @staticmethod
     def _clave_limites_base(anio_base: int) -> str:
@@ -84,13 +91,17 @@ class ProyeccionCache:
             self._clave_limites_base(anio_base), json.dumps(limites), ex=TTL_SEGUNDOS
         )
 
-    async def obtener_serie(self, codigo_municipio: str, desde: int, hasta: int) -> list[dict] | None:
-        crudo = await self._redis.get(self._clave_serie(codigo_municipio, desde, hasta))
+    async def obtener_serie(
+        self, codigo_municipio: str, desde: int, hasta: int, indicador: str = INDICADOR_SERIE_RPC
+    ) -> list[dict] | None:
+        crudo = await self._redis.get(self._clave_serie(codigo_municipio, desde, hasta, indicador))
         return json.loads(crudo) if crudo is not None else None
 
-    async def guardar_serie(self, codigo_municipio: str, desde: int, hasta: int, serie: list[dict]) -> None:
+    async def guardar_serie(
+        self, codigo_municipio: str, desde: int, hasta: int, serie: list[dict], indicador: str = INDICADOR_SERIE_RPC
+    ) -> None:
         await self._redis.set(
-            self._clave_serie(codigo_municipio, desde, hasta), json.dumps(serie), ex=TTL_SEGUNDOS
+            self._clave_serie(codigo_municipio, desde, hasta, indicador), json.dumps(serie), ex=TTL_SEGUNDOS
         )
 
 
