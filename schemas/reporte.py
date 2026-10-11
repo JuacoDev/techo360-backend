@@ -66,6 +66,24 @@ class ReporteGenerarRequest(BaseModel):
         return self
 
 
+class SerieGraficaPrevia(BaseModel):
+    nombre: str
+    valores: list[float | None]
+
+
+class GraficaPrevia(BaseModel):
+    variable: str
+    nombre: str
+    unidad: str
+    series: list[SerieGraficaPrevia]
+    total_series: int
+
+
+class PreviaGraficasResponse(BaseModel):
+    anios: list[int]
+    graficas: list[GraficaPrevia]
+
+
 class ReporteResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

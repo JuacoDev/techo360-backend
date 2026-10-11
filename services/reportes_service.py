@@ -1,4 +1,5 @@
 import logging
+import math
 import uuid
 from collections import defaultdict
 from pathlib import Path
@@ -8,7 +9,8 @@ from openpyxl import Workbook
 from openpyxl.chart import LineChart, Reference
 from openpyxl.styles import Font, PatternFill
 from reportlab.graphics import renderPDF
-from reportlab.graphics.charts.linecharts import VerticalLineChart
+from reportlab.graphics.charts.legends import LineLegend
+from reportlab.graphics.charts.linecharts import HorizontalLineChart
 from reportlab.graphics.shapes import Drawing
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER
@@ -17,6 +19,7 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
 from reportlab.platypus import (
     Flowable,
+    KeepTogether,
     PageBreak,
     Paragraph,
     SimpleDocTemplate,
@@ -39,6 +42,16 @@ from services.score_privacion import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _finito(valor) -> float | None:
+    """float(valor) o None si falta o no es finito. mapcalordb.valuevar es NUMERIC y admite
+    'NaN': una gráfica con NaN/inf revienta al dibujarse (y un Excel lo guardaría corrupto),
+    así que un valor no finito se trata como dato faltante."""
+    if valor is None:
+        return None
+    numero = float(valor)
+    return numero if math.isfinite(numero) else None
 
 VARIABLES_REPORTE = {
     "score_privacion": ("Score de Privación", ""),
@@ -73,6 +86,45 @@ def preparar_esquema_reportes() -> None:
                 ADD COLUMN IF NOT EXISTS archivo_nombre VARCHAR(255),
                 ADD COLUMN IF NOT EXISTS error TEXT
         """))
+
+
+def validar_zonas_existentes(db: Session, solicitud: ReporteGenerarRequest) -> None:
+    """Falla rápido (antes de encolar) si algún código de zona no existe."""
+    if solicitud.zonas.departamentos:
+        existentes = {
+            fila[0]
+            for fila in db.execute(
+                text("""
+                    SELECT codigo_departamento FROM public.zonas_departamento
+                    WHERE codigo_departamento = ANY(:codigos)
+                      AND codigo_departamento != '00'
+                """),
+                {"codigos": solicitud.zonas.departamentos},
+            )
+        }
+        faltantes = sorted(set(solicitud.zonas.departamentos) - existentes)
+        if faltantes:
+            raise ValueError(
+                f"Departamentos inexistentes: {', '.join(faltantes)}."
+            )
+    if solicitud.zonas.municipios:
+        existentes = {
+            fila[0]
+            for fila in db.execute(
+                text("""
+                    SELECT codigo_municipio FROM public.zonas_municipio
+                    WHERE codigo_municipio = ANY(:codigos)
+                      AND codigo_municipio != '00000'
+                """),
+                {"codigos": solicitud.zonas.municipios},
+            )
+        }
+        faltantes = sorted(set(solicitud.zonas.municipios) - existentes)
+        if faltantes:
+            raise ValueError(
+                f"Municipios inexistentes: {', '.join(faltantes[:5])}"
+                + ("…" if len(faltantes) > 5 else ".")
+            )
 
 
 def obtener_datos_reporte(
@@ -194,10 +246,9 @@ def obtener_datos_reporte(
 
     valores_score: dict[tuple[int, str], list[float]] = defaultdict(list)
     for fila in filas_score_global:
-        if fila["valuevar"] is not None:
-            valores_score[(fila["yearm"], fila["namevar"])].append(
-                float(fila["valuevar"])
-            )
+        valor_finito = _finito(fila["valuevar"])
+        if valor_finito is not None:
+            valores_score[(fila["yearm"], fila["namevar"])].append(valor_finito)
     limites_score = {
         clave: (min(valores), max(valores)) if valores else (None, None)
         for clave, valores in valores_score.items()
@@ -207,11 +258,7 @@ def obtener_datos_reporte(
     for fila in filas_municipio:
         clave = (fila["codigodivipola"], fila["yearm"], fila["namevar"])
         datos_municipio[clave] = {
-            "valor": (
-                float(fila["valuevar"])
-                if fila["valuevar"] is not None
-                else None
-            ),
+            "valor": _finito(fila["valuevar"]),
             "origen": fila["originvar"],
         }
 
@@ -315,7 +362,7 @@ def _valores_por_grafica(
     series_grafica = []
     for zona in zonas:
         valores_por_anio = valores_por_zona.get((zona["nivel"], zona["codigo"]), {})
-        valores = [valores_por_anio.get(int(anio)) for anio in anios]
+        valores = [_finito(valores_por_anio.get(int(anio))) for anio in anios]
         if any(valor is not None for valor in valores):
             series_grafica.append(
                 (
@@ -326,33 +373,81 @@ def _valores_por_grafica(
     return anios, series_grafica
 
 
+PALETA_GRAFICA = [
+    "#126782", "#E4572E", "#2E933C", "#F3A712", "#7B2CBF", "#17BEBB",
+    "#D81159", "#6C757D", "#8D5B4C", "#3A86FF",
+]
+MAX_SERIES_LEYENDA = 10
+
+
 class ReporteGrafica(Flowable):
+    """Línea por zona a lo largo de los años (años en X) con leyenda de colores.
+
+    Si hay más zonas que colores, se grafican las primeras MAX_SERIES_LEYENDA
+    (el resto sigue completo en las tablas) para que la leyenda siga legible.
+    """
+
     def __init__(self, variable: str, anios: list[str], datos: list[tuple[str, list[float | None]]]):
         super().__init__()
         self.variable = variable
         self.anios = anios
-        self.datos = datos
+        self.datos = datos[:MAX_SERIES_LEYENDA]
+        self.recortada = len(datos) > MAX_SERIES_LEYENDA
         self.width = 9.3 * inch
-        self.height = 3.2 * inch
+        filas_leyenda = (len(self.datos) + 1) // 2
+        self.alto_leyenda = 14 * filas_leyenda + 6
+        self.height = 3.0 * inch + self.alto_leyenda
+
+    def wrap(self, aviable_width, aviable_height):
+        return self.width, self.height
 
     def draw(self):
+        # Una gráfica que no se pueda dibujar no debe tumbar el reporte entero.
+        try:
+            self._dibujar()
+        except Exception:
+            logger.exception("No se pudo dibujar la gráfica de %s.", self.variable)
+            self.canv.setFont("Helvetica-Oblique", 9)
+            self.canv.setFillColor(colors.HexColor("#B3261E"))
+            self.canv.drawString(0, self.height / 2, "No se pudo dibujar esta gráfica; los datos están en las tablas.")
+
+    def _dibujar(self):
         drawing = Drawing(self.width, self.height)
-        grafica = VerticalLineChart()
+        grafica = HorizontalLineChart()
         grafica.x = 48
-        grafica.y = 35
+        grafica.y = self.alto_leyenda + 35
         grafica.width = self.width - 65
-        grafica.height = self.height - 65
+        grafica.height = self.height - self.alto_leyenda - 55
         grafica.categoryAxis.categoryNames = self.anios
-        grafica.categoryAxis.labels.angle = 45
-        grafica.categoryAxis.labels.fontSize = 7
-        grafica.valueAxis.labels.fontSize = 7
+        grafica.categoryAxis.labels.fontSize = 8
+        grafica.valueAxis.labels.fontSize = 8
+        grafica.valueAxis.valueMin = None
         grafica.data = [
             tuple(float(valor) if valor is not None else None for valor in valores)
             for _, valores in self.datos
         ]
-        grafica.lines[0].strokeColor = colors.HexColor("#126782")
-        grafica.lines[0].strokeWidth = 1.5
+        for indice in range(len(self.datos)):
+            grafica.lines[indice].strokeColor = colors.HexColor(PALETA_GRAFICA[indice])
+            grafica.lines[indice].strokeWidth = 1.8
+            grafica.lines[indice].symbol = None
         drawing.add(grafica)
+
+        leyenda = LineLegend()
+        leyenda.x = 48
+        leyenda.y = self.alto_leyenda - 6
+        leyenda.alignment = "right"
+        leyenda.fontSize = 8
+        leyenda.dx = 14
+        leyenda.dy = 6
+        leyenda.dxTextSpace = 5
+        leyenda.deltax = (self.width - 65) / 2
+        leyenda.deltay = 13
+        leyenda.columnMaximum = (len(self.datos) + 1) // 2
+        leyenda.colorNamePairs = [
+            (colors.HexColor(PALETA_GRAFICA[indice]), nombre[:48])
+            for indice, (nombre, _) in enumerate(self.datos)
+        ]
+        drawing.add(leyenda)
         renderPDF.draw(drawing, self.canv, 0, 0)
 
 
@@ -489,15 +584,21 @@ def _crear_pdf(
             )
             if not valores:
                 continue
-            historia.extend(
-                [
-                    Paragraph(VARIABLES_REPORTE[variable][0], estilos["Heading2"]),
-                    Paragraph(
-                        "Cada línea representa una zona incluida en los resultados.",
-                        estilos["BodyText"],
-                    ),
-                    ReporteGrafica(variable, anios, valores),
-                ]
+            grafica = ReporteGrafica(variable, anios, valores)
+            nota = (
+                f"Cada línea representa una zona (se muestran las primeras {MAX_SERIES_LEYENDA} de {len(valores)}; "
+                "los datos completos están en las tablas)."
+                if grafica.recortada
+                else "Cada línea representa una zona incluida en los resultados."
+            )
+            historia.append(
+                KeepTogether(
+                    [
+                        Paragraph(VARIABLES_REPORTE[variable][0], estilos["Heading2"]),
+                        Paragraph(nota, estilos["BodyText"]),
+                        grafica,
+                    ]
+                )
             )
 
     if solicitud.opciones.conclusiones:
@@ -595,35 +696,64 @@ def _crear_excel(
             if not valores:
                 continue
             hoja = libro.create_sheet(f"Grafica {indice}")
-            hoja.append(
-                ["Año"] + [texto_seguro(nombre) for nombre, _ in valores]
-            )
-            for fila_indice, anio in enumerate(anios):
+            try:
                 hoja.append(
-                    [int(anio)]
-                    + [
-                        valores_serie[fila_indice]
-                        for _, valores_serie in valores
-                    ]
+                    ["Año"] + [texto_seguro(nombre) for nombre, _ in valores]
                 )
-            grafica = LineChart()
-            grafica.title = VARIABLES_REPORTE[variable][0]
-            grafica.y_axis.title = VARIABLES_REPORTE[variable][1] or "Valor"
-            grafica.x_axis.title = "Año"
-            grafica.height = 9
-            grafica.width = 18
-            datos = Reference(
-                hoja,
-                min_col=2,
-                max_col=len(valores) + 1,
-                min_row=1,
-                max_row=len(anios) + 1,
-            )
-            categorias = Reference(hoja, min_col=1, min_row=2, max_row=len(anios) + 1)
-            grafica.add_data(datos, titles_from_data=True)
-            grafica.set_categories(categorias)
-            hoja.add_chart(grafica, f"A{len(anios) + 4}")
+                for fila_indice, anio in enumerate(anios):
+                    hoja.append(
+                        [int(anio)]
+                        + [
+                            valores_serie[fila_indice]
+                            for _, valores_serie in valores
+                        ]
+                    )
+                grafica = LineChart()
+                grafica.title = VARIABLES_REPORTE[variable][0]
+                grafica.y_axis.title = VARIABLES_REPORTE[variable][1] or "Valor"
+                grafica.x_axis.title = "Año"
+                grafica.height = 9
+                grafica.width = 18
+                datos = Reference(
+                    hoja,
+                    min_col=2,
+                    max_col=len(valores) + 1,
+                    min_row=1,
+                    max_row=len(anios) + 1,
+                )
+                categorias = Reference(hoja, min_col=1, min_row=2, max_row=len(anios) + 1)
+                grafica.add_data(datos, titles_from_data=True)
+                grafica.set_categories(categorias)
+                hoja.add_chart(grafica, f"A{len(anios) + 4}")
+            except Exception:
+                logger.exception("No se pudo crear la gráfica de %s.", variable)
+                libro.remove(hoja)
     libro.save(path)
+
+
+def construir_previa_graficas(solicitud: ReporteGenerarRequest, db: Session) -> dict:
+    """Series por año de cada variable, con las mismas reglas que las gráficas del reporte
+    (mismos datos, mismo tope de zonas por gráfica), para mostrarlas antes de generarlo."""
+    zonas, series = obtener_datos_reporte(db, solicitud)
+    inicio = solicitud.periodo.anio_inicio
+    fin = solicitud.periodo.anio_fin
+    graficas = []
+    for variable in solicitud.variables:
+        _, datos = _valores_por_grafica(zonas, series, variable, inicio, fin)
+        nombre, unidad = VARIABLES_REPORTE[variable]
+        graficas.append(
+            {
+                "variable": variable,
+                "nombre": nombre,
+                "unidad": unidad,
+                "series": [
+                    {"nombre": nombre_zona, "valores": valores}
+                    for nombre_zona, valores in datos[:MAX_SERIES_LEYENDA]
+                ],
+                "total_series": len(datos),
+            }
+        )
+    return {"anios": list(range(inicio, fin + 1)), "graficas": graficas}
 
 
 def generar_archivo_reporte(

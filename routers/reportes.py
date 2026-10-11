@@ -8,9 +8,17 @@ from db.session import get_db
 from models.mapcalor_user import MapCalorUser
 from models.reporte import Reporte
 from routers.auth import get_current_user
-from schemas.reporte import ReporteGenerarRequest, ReporteResponse
+from schemas.reporte import (
+    PreviaGraficasResponse,
+    ReporteGenerarRequest,
+    ReporteResponse,
+)
 from services.reportes_consumer import publicar_reporte
-from services.reportes_service import obtener_ruta_archivo
+from services.reportes_service import (
+    construir_previa_graficas,
+    obtener_ruta_archivo,
+    validar_zonas_existentes,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +60,14 @@ async def generar_reporte(
     db: Session = Depends(get_db),
     current_user: MapCalorUser = Depends(get_current_user),
 ):
+    try:
+        validar_zonas_existentes(db, solicitud)
+    except ValueError as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(error),
+        ) from error
+
     reporte = Reporte(
         usuario_id=current_user.id,
         titulo=solicitud.opciones.titulo,
@@ -89,6 +105,26 @@ async def generar_reporte(
         ) from error
 
     return _respuesta_reporte(reporte)
+
+
+@router.post(
+    "/previa-graficas",
+    response_model=PreviaGraficasResponse,
+    summary="Series por año de las gráficas, para la vista previa del reporte",
+)
+def previa_graficas(
+    solicitud: ReporteGenerarRequest,
+    db: Session = Depends(get_db),
+    current_user: MapCalorUser = Depends(get_current_user),
+):
+    try:
+        validar_zonas_existentes(db, solicitud)
+        return construir_previa_graficas(solicitud, db)
+    except ValueError as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(error),
+        ) from error
 
 
 @router.get(
