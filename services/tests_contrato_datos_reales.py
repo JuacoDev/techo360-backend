@@ -76,7 +76,9 @@ class TestScoreConDatosReales(unittest.IsolatedAsyncioTestCase):
         return self.cache[anio]
 
     async def test_misma_regla_en_los_dos_repos(self):
-        for o in ("TerriData", "DANE-proyeccion-poblacion-2030", "proyeccion-x", "TerriData-proyeccion", None):
+        # INC-001: el nombre antiguo "DANE-proyeccion-poblacion-" ya no esta en la base; el backend lo trata como
+        # proyeccion (red de seguridad) y techo360-proyeccion/app/origen.py aun no, asi que NO se compara aqui.
+        for o in ("TerriData", "proyeccion-poblacion-sobre-area", "proyeccion-x", "TerriData-proyeccion", None):
             self.assertEqual(es_proyeccion(o), es_proyeccion_servicio(o), o)
 
     async def test_contrato_del_score_2025_2026_2030_2042(self):

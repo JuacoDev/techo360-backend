@@ -3,7 +3,8 @@ lado del backend. No usan BD, Redis ni RabbitMQ: todo se mockea.
 
 Contrato que fijan:
   * es_proyeccion(origen): empieza por "proyeccion-" o termina en "-proyeccion"
-    (DANE-proyeccion-poblacion-AAAA es REAL).
+    (INC-001: la densidad proyectada es "proyeccion-poblacion-sobre-area"; el nombre antiguo
+    "DANE-proyeccion-poblacion-AAAA" ya NO es real, se trata como proyeccion).
   * Un deficit de la fila del año pedido es real solo si su origen lo es; el congelado
     de 2024 usado para otros años es SIEMPRE es_real=False.
   * score_privacion.es_real = True solo si los TRES insumos son reales; su fiabilidad es
@@ -38,8 +39,18 @@ class TestEsProyeccion(unittest.TestCase):
         self.assertTrue(es_proyeccion("TerriData-proyeccion"))
 
     def test_fuentes_reales_no_son_proyeccion(self):
-        for origen in ("TerriData", "IGAC Catastro", "DANE-CNPV2018", "DANE-proyeccion-poblacion-2030"):
+        for origen in ("TerriData", "IGAC Catastro", "DANE-CNPV2018"):
             self.assertFalse(es_proyeccion(origen), origen)
+            self.assertTrue(es_real(origen), origen)
+
+    def test_inc001_densidad_proyectada_es_proyeccion(self):
+        # nombre nuevo (prefijo proyeccion-) y nombre legado (red de seguridad): ninguno es dato real
+        for origen in ("proyeccion-poblacion-sobre-area", "DANE-proyeccion-poblacion-2024", "DANE-proyeccion-poblacion-2042"):
+            self.assertTrue(es_proyeccion(origen), origen)
+            self.assertFalse(es_real(origen), origen)
+
+    def test_inc001_otras_fuentes_dane_siguen_siendo_reales(self):
+        for origen in ("DANE-CNPV2018", "DANE-poblacion", "DANE"):
             self.assertTrue(es_real(origen), origen)
 
     def test_sin_origen_se_trata_como_real(self):
