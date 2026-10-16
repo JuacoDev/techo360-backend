@@ -24,13 +24,25 @@ propios, con serie 2018-2042 publicada 08-ago-2025 (mas reciente que
 lo que el equipo pudo confirmar sobre el origen/vigencia real de
 TerriData para esta variable).
 
-originVar = "DANE-proyeccion-poblacion-{anio}" (nombre explicito con el
-año real del dato usado -- la fuente en si se publico en ago-2025, pero
-el AÑO DEL DATO que se usa aqui es el año pedido, para ser consistente
-con la convencion ya establecida en el proyecto de nombrar el origen
-segun el año real del dato, no el año de publicacion; ver
-"DANE-CNPV2018" como precedente: el censo se publico oficialmente en
-2020 pero el origen se llama por el año del levantamiento, 2018).
+>>> INC-001 (16/10/2026) -- CAMBIO DE ORIGEN, leer antes de ejecutar <<<
+Este script escribia originVar = "DANE-proyeccion-poblacion-{anio}" y
+intervaloConfianza = NULL, y esas filas se tomaban por dato REAL. Es
+PROYECCION (poblacion proyectada DANE / area). Ahora escribe, para TODOS
+los años (2024-2042),
+
+    originVar = "proyeccion-poblacion-sobre-area"   (prefijo "proyeccion-" + metodo,
+                                                      sin el nombre de la fuente ni el año)
+    intervaloConfianza = 30                          (fiabilidad 0-100, constante)
+
+que es lo que ya quedo en mapcalordb tras el UPDATE autorizado del 16/10/2026
+(19.874 filas; ver claude/fase3-inc001-ejecucion.md). El año ya esta en yearM,
+asi que el nombre no lo repite. El ancla del sanity check (año previo) se busca
+con ese mismo origen. Este script NO se ejecuto al cambiarlo.
+
+Texto original (historico, ya NO vigente): originVar = "DANE-proyeccion-poblacion-
+{anio}" (nombre explicito con el año real del dato usado, por analogia con
+"DANE-CNPV2018": el censo se publico en 2020 pero el origen se llama por el año del
+levantamiento, 2018).
 
 ===========================================================================
 EXTENSION 2025-2042 (24-sep-2026) -- de un solo año (2024) a un rango
@@ -158,8 +170,34 @@ RATIO_MINIMA_ACEPTABLE = 0.5
 RATIO_MAXIMA_ACEPTABLE = 2.0
 
 
+# INC-001: origen unico para toda la serie 2024-2042 (el año ya esta en yearM) e
+# intervaloConfianza constante. Debe coincidir con lo que ya quedo en mapcalordb.
+ORIGEN_PROYECCION = "proyeccion-poblacion-sobre-area"
+INTERVALO_CONFIANZA = 30.0
+
+
 def origen_para(anio: int) -> str:
-    return f"DANE-proyeccion-poblacion-{anio}"
+    """Origen que se escribe (y se busca como ancla) para `anio`. Desde INC-001 es el
+    mismo para todos los años; el parametro se conserva por compatibilidad con los
+    llamadores (cargar_densidad_dane_anio_previo, main)."""
+    return ORIGEN_PROYECCION
+
+
+def construir_records(anio: int, densidades: dict[str, tuple[str, float]]) -> list[IndicadorRecord]:
+    """IndicadorRecord de `anio` con el origen y el intervaloConfianza de INC-001."""
+    origen = origen_para(anio)
+    return [
+        IndicadorRecord(
+            codigo_divipola=codigo,
+            entidad_territorial=nombre,
+            variable=VARIABLE,
+            valor=densidad,
+            anio=anio,
+            fuente=origen,
+            intervalo_confianza=INTERVALO_CONFIANZA,
+        )
+        for codigo, (nombre, densidad) in densidades.items()
+    ]
 
 
 def _conectar_con_timeout(database_url: str, statement_timeout_ms: int = 30_000):
@@ -305,8 +343,9 @@ def cargar_densidad_dane_anio_previo(cur, anio_previo: int) -> dict[str, float]:
     comparar" al correrlo solo, con 2026 ya real en la BD).
 
     Fix: consultar MapCalorDB directamente por la fila DANE YA
-    PERSISTIDA de anio_previo (origen exacto 'DANE-proyeccion-poblacion-
-    {anio_previo}'), no memoria de la misma corrida -- funciona sin
+    PERSISTIDA de anio_previo (origen exacto origen_para(anio_previo) =
+    'proyeccion-poblacion-sobre-area' desde INC-001; antes 'DANE-proyeccion-
+    poblacion-{anio_previo}'), no memoria de la misma corrida -- funciona sin
     importar si anio_previo se proceso en este mismo subproceso o en
     uno anterior (o en una sesion previa por completo).
 
@@ -495,17 +534,7 @@ def main(dry_run: bool, anio_inicio: int, anio_fin: int, confirmar_sobrescribir:
         for anio in anios_a_escribir:
             origen = origen_para(anio)
             densidades_nuevas = densidades_por_anio[anio]
-            records = [
-                IndicadorRecord(
-                    codigo_divipola=codigo,
-                    entidad_territorial=nombre,
-                    variable=VARIABLE,
-                    valor=densidad,
-                    anio=anio,
-                    fuente=origen,
-                )
-                for codigo, (nombre, densidad) in densidades_nuevas.items()
-            ]
+            records = construir_records(anio, densidades_nuevas)
             print(f"\nEscribiendo {len(records)} filas para {anio} (origen='{origen}', conexion reutilizada)...")
             conn_escritura = _conectar_con_timeout(database_url)
             try:

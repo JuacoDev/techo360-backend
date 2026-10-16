@@ -110,9 +110,17 @@ resuelve la coincidencia igual sin importar como se escriban.
 >>>       "DANE-proyeccion-poblacion-2024" mas abajo -- reemplazo desde
 >>>       22-sep-2026, TerriData queda solo como fuente historica
 >>>       (años 2008-2023) para esta variable.
->>>   "DANE-proyeccion-poblacion-{anio}" (agregado 22-sep-2026, ver
+>>>   "proyeccion-poblacion-sobre-area" (INC-001, 16/10/2026) -- PROYECCION de
+>>>       densidad_poblacional 2024-2042 (poblacion proyectada DANE / area_km2),
+>>>       intervaloConfianza = 30. Reemplaza al nombre "DANE-proyeccion-poblacion-
+>>>       {anio}" descrito justo debajo: esas filas se renombraron en la base y
+>>>       actualizar_densidad_dane.py ya escribe este origen. services/origen.py
+>>>       la clasifica como proyeccion (prefijo "proyeccion-").
+>>>   "DANE-proyeccion-poblacion-{anio}" -- NOMBRE LEGADO, ya no existe en la base
+>>>       (agregado 22-sep-2026, ver
 >>>       ingestion/dane_poblacion_adapter.py y
->>>       ingestion/actualizar_densidad_dane.py) -- dato real observado
+>>>       ingestion/actualizar_densidad_dane.py); entonces se tomaba por dato real
+>>>       observado, error corregido por INC-001
 >>>       para densidad_poblacional, calculado como poblacion municipal
 >>>       DANE (anexo oficial PPED 2018-2042, publicado 08-ago-2025) /
 >>>       area_km2 (PostGIS sobre zonas_municipio.geom, capa canonica
