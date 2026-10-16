@@ -52,9 +52,13 @@ class TestTipoDelHistorico(unittest.TestCase):
         self.assertEqual(_serie([(2020, 1.0, "TerriData-proyeccion")])[2020]["tipo"], "backfill")
 
     def test_los_datos_reales_siguen_siendo_observados(self):
-        # DANE-proyeccion-poblacion-AAAA es el NOMBRE de la fuente oficial (dato real), no un relleno
-        for o in ("TerriData", "IGAC Catastro", "DANE-CNPV2018", "DANE-proyeccion-poblacion-2024"):
+        for o in ("TerriData", "IGAC Catastro", "DANE-CNPV2018"):
             self.assertEqual(_serie([(2024, 1.0, o)])[2024]["tipo"], "observado", o)
+
+    def test_inc001_densidad_proyectada_es_backfill(self):
+        # INC-001: la poblacion proyectada DANE / area es proyeccion, con el nombre nuevo y con el legado
+        for o in ("proyeccion-poblacion-sobre-area", "DANE-proyeccion-poblacion-2024"):
+            self.assertEqual(_serie([(2024, 1.0, o)])[2024]["tipo"], "backfill", o)
 
     def test_anio_sin_fila_es_sin_dato_y_la_ventana_no_cambia(self):
         s = _serie([(2024, 1.0, "TerriData")])

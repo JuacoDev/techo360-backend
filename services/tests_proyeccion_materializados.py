@@ -70,7 +70,7 @@ class TestLecturaDeZonas(unittest.TestCase):
         db = FakeDB([
             fila_zona("05001", 12.5),
             fila_zona("05002", 40.0, origen="TerriData", ic=None),
-            fila_zona("05003", 7.0, origen="DANE-proyeccion-poblacion-2030", ic=None),
+            fila_zona("05003", 7.0, origen="proyeccion-poblacion-sobre-area", ic=30),
             fila_zona("05004", 30.0, origen="proyeccion-techo360-modelo-tenencia", ic=None),
         ])
         zonas = servicio.leer_zonas_materializadas("tenencia_informal_terrenos", 2030, db)
@@ -83,7 +83,8 @@ class TestLecturaDeZonas(unittest.TestCase):
         self.assertEqual(por["05001"].fiabilidad, 60.0)
         self.assertTrue(por["05002"].es_real)
         self.assertEqual(por["05002"].fiabilidad, 100.0)
-        self.assertTrue(por["05003"].es_real)  # DANE-proyeccion-poblacion-* es dato real
+        self.assertFalse(por["05003"].es_real)  # INC-001: la densidad proyectada es proyeccion, no dato real
+        self.assertEqual(por["05003"].fiabilidad, 30.0)
         self.assertFalse(por["05004"].es_real)
         self.assertEqual(por["05004"].fiabilidad, 30.0)  # proyeccion sin intervalo -> minimo
         self.assertEqual(por["05001"].origen, "proyeccion-techo360-ultimo-valor")
