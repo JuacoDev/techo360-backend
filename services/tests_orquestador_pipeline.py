@@ -110,7 +110,7 @@ class Validador(unittest.TestCase):
     def test_derivados_permitidos(self):
         self.assertEqual(vc("Subió 4,2 puntos porcentuales")["estado"], "ok")  # 94,2 - 90,0
         self.assertEqual(vc("Subió un 4,7 %")["estado"], "ok")  # variacion porcentual 90,0 -> 94,2
-        self.assertEqual(vc("Entre ambos suman 184,2")["estado"], "ok")
+        self.assertEqual(vc("Entre ambos suman 184,2")["estado"], "no_validada")  # las sumas ya no se aceptan (auditoria 4.10)
         self.assertEqual(vc("Subió 5,1 puntos")["estado"], "no_validada")
 
     def test_promedios_y_estimaciones_propias_no_se_validan(self):
