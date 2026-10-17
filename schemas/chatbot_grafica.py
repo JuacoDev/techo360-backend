@@ -65,6 +65,13 @@ class GraficaSpec(BaseModel):
             raise ValueError("variable fuera del catalogo: " + desconocidas[0])
         return v
 
+    @field_validator("variables", "zonas")
+    @classmethod
+    def _sin_repetidos(cls, v):
+        if len(v) != len(set(v)):
+            raise ValueError("la lista no admite elementos repetidos")
+        return v
+
     @field_validator("anios")
     @classmethod
     def _anios_ordenados(cls, v):

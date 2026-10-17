@@ -195,6 +195,25 @@ class Zonas(unittest.TestCase):
         self._estructura(_spec(zonas=[]))
 
 
+class Repetidos(unittest.TestCase):
+    """Decision del 17/10/2026: variables y zonas repetidas se rechazan."""
+
+    def _estructura(self, spec):
+        with self.assertRaises(ErrorGrafica) as cm:
+            validar_especificacion(spec)
+        self.assertEqual(cm.exception.causa, "estructura")
+
+    def test_variables_repetidas(self):
+        self._estructura(_spec(tipo="barras_agrupadas", variables=["cobertura_acueducto", "cobertura_acueducto"]))
+
+    def test_zonas_repetidas(self):
+        self._estructura(_spec(modo="comparar", zonas=["68001", "68001"]))
+
+    def test_sin_repetidos_pasa(self):
+        validar_especificacion(_spec(modo="comparar", zonas=["68001", "05001"]))
+        validar_especificacion(_spec(tipo="barras_agrupadas", variables=["cobertura_acueducto", "cobertura_alcantarillado"]))
+
+
 class Anios(unittest.TestCase):
     def _estructura(self, spec):
         with self.assertRaises(ErrorGrafica) as cm:
