@@ -22,6 +22,7 @@ from services.orquestador.alias import (
     ALIAS_VARIABLES,
     CONECTORES,
     NOMBRE_VISIBLE_DEPARTAMENTO,
+    NOMBRES_SENSIBLES,
 )
 
 MAX_MUNICIPIOS = 5
@@ -34,6 +35,14 @@ def normalizar(texto: str) -> str:
     s = unicodedata.normalize("NFKD", (texto or "").lower())
     s = "".join(c for c in s if not unicodedata.combining(c))
     return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9\s]", " ", s)).strip()
+
+
+def tokenizar(texto: str) -> list[tuple[str, bool]]:
+    """[(palabra normalizada, empieza con mayuscula en el texto original)]; misma segmentacion que
+    normalizar(texto).split()."""
+    s = unicodedata.normalize("NFKD", texto or "")
+    s = "".join(c for c in s if not unicodedata.combining(c))
+    return [(m.group().lower(), m.group()[0].isupper()) for m in re.finditer(r"[A-Za-z0-9]+", s)]
 
 
 @dataclass(frozen=True)
@@ -177,6 +186,7 @@ class _Span:
     es_dep: bool
     tipo: str = ""
     departamento: str | None = None  # codigo de departamento enlazado (solo municipios)
+    forzado_dep: bool = False
 
     @property
     def n(self) -> int:
@@ -200,16 +210,23 @@ def _spans(tokens: list[str], cat: Catalogo) -> list[_Span]:
         usado |= r
         elegidos.append(s)
     elegidos.sort(key=lambda s: s.inicio)
+    for s in elegidos:  # "departamento de X" / "en el departamento X": siempre departamento (4.1b)
+        j = s.inicio - 1
+        while j >= 0 and tokens[j] in ("de", "del", "el", "la"):
+            j -= 1
+        s.forzado_dep = s.es_dep and j >= 0 and tokens[j] in ("departamento", "dpto", "depto")
     hay_mun_puro = any(s.es_mun and not s.es_dep for s in elegidos)
     for s in elegidos:
-        if s.es_mun and s.es_dep:
+        if s.forzado_dep:
+            s.tipo = "dep"
+        elif s.es_mun and s.es_dep:
             s.tipo = "dep" if hay_mun_puro else "mun"  # "Caldas" sola es municipio; "Rionegro, Caldas" lleva departamento
         else:
             s.tipo = "mun" if s.es_mun else "dep"
     # Dos nombres que son a la vez municipio y departamento ("Caldas, Boyacá", "Córdoba de Bolívar",
     # "Nariño, Nariño"): el segundo es el departamento del primero si ese municipio existe alli.
     for x, y in zip(elegidos, elegidos[1:]):
-        if not (x.tipo == y.tipo == "mun" and x.es_dep and y.es_dep):
+        if not (x.tipo == y.tipo == "mun" and x.es_dep and y.es_dep and not x.forzado_dep and not y.forzado_dep):
             continue
         if not all(t in CONECTORES for t in tokens[x.fin:y.inicio]):
             continue
@@ -252,9 +269,18 @@ def _listar(entradas: list[Municipio]) -> str:
 
 def resolver(texto: str, cat: Catalogo, hoy: date | None = None) -> Resolucion:
     hoy = hoy or date.today()
-    tokens = normalizar(texto).split()
+    palabras = tokenizar(texto)
+    tokens = [p for p, _ in palabras]
     spans = _spans(tokens, cat)
     _enlazar_departamentos(tokens, spans, cat)
+    # 4.1b: un nombre "sensible" (coincide con una palabra comun) solo cuenta como municipio si va
+    # capitalizado, precedido de "de/del/en" o acompañado de un departamento.
+    for s in spans:
+        if s.tipo == "mun" and s.clave in NOMBRES_SENSIBLES:
+            capitalizado = palabras[s.inicio][1]
+            precedido = s.inicio > 0 and tokens[s.inicio - 1] in ("de", "del", "en")
+            if not (capitalizado or precedido or s.departamento is not None):
+                s.tipo = "ignorado"
     muns = [s for s in spans if s.tipo == "mun"]
     ocupado = {i for s in spans for i in range(s.inicio, s.fin)}
     res = Resolucion()
@@ -283,6 +309,8 @@ def resolver(texto: str, cat: Catalogo, hoy: date | None = None) -> Resolucion:
                 return res
             entradas = elegidas
         if len(entradas) > 1:
+            if not (res.variables or res.anios):
+                continue  # 4.1b: sin intencion de datos un homonimo no pide aclaracion; simplemente no se resuelve
             res.aclaracion = {"tipo": "homonimo",
                               "texto": f"Hay varios municipios llamados {nombre}: {_listar(entradas)}. ¿A cuál te refieres?"}
             res.municipios = []

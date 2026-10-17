@@ -74,3 +74,10 @@ ALIAS_DEPARTAMENTOS = {
 
 # Palabras que pueden ir entre un municipio y su departamento ("Rionegro de Santander", "en Antioquia: Rionegro").
 CONECTORES = frozenset({"de", "del", "en", "la", "el", "departamento", "dpto", "depto", "municipio"})
+
+# 4.1b: nombres de municipio que coinciden con una palabra comun del español. Solo cuentan como municipio si
+# van capitalizados en el texto original, precedidos de "de/del/en" o acompañados de un departamento.
+# Lista corta y ampliable (claves normalizadas).
+NOMBRES_SENSIBLES = frozenset({
+    "pesca", "florida", "granada", "piedras", "palmar", "hato", "toro", "venecia", "sucre", "caldas",
+})

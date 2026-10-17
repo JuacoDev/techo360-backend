@@ -110,6 +110,13 @@ class Settings(BaseSettings):
     chatbot_max_en_proceso_por_usuario: int = 2
     chatbot_max_cola: int = 10
 
+    # Fase 4 (orquestador): interruptor del pipeline v2 (resolutor de entidades, contexto de datos, contrato RPC v2,
+    # validador de cifras, sanitizacion y metadatos de la migracion 0004). False (por defecto) = el comportamiento de
+    # siempre (contrato v1). Orden de despliegue (fase2-2 seccion 6): primero actualizar TODOS los consumers del chatbot
+    # (VPS y workers) a la version que acepta v1 y v2, despues activar con CHATBOT_ORQUESTADOR_ACTIVO=true y recrear
+    # el backend. Reversa: apagarlo y recrear el backend.
+    chatbot_orquestador_activo: bool = False
+
     # /otp/request: tope por IP en la ventana de 15 min y por dia (ver services/otp_service.py). Variables
     # OTP_IP_RATE_LIMIT_MAX (1..100) y OTP_IP_DAILY_MAX (1..500); vacio, no numerico, <= 0 o mayor que el
     # maximo -> el valor por defecto (10 y 150).

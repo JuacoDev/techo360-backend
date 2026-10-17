@@ -60,9 +60,19 @@ def conversacion_de_usuario(db: Session, conversacion_id: int, usuario_id: int) 
     )
 
 
-def agregar_mensaje(db: Session, conversacion_id: int, rol: str, contenido: str) -> Mensaje:
+def agregar_mensaje(db: Session, conversacion_id: int, rol: str, contenido: str, metadatos: dict | None = None) -> Mensaje:
+    """`metadatos` (solo el camino v2 del orquestador, 4.8): se guardan en la misma transaccion; None = como siempre."""
     mensaje = Mensaje(conversacion_id=conversacion_id, rol=rol, contenido=contenido)
     db.add(mensaje)
+    if metadatos is not None:
+        from services.orquestador.persistencia import aplicar_metadatos
+
+        db.flush()
+        try:
+            aplicar_metadatos(db, mensaje.id, metadatos)
+        except Exception:
+            db.rollback()
+            raise
     db.commit()
     db.refresh(mensaje)
     return mensaje
