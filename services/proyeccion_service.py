@@ -451,3 +451,170 @@ async def calcular_zonas_score_privacion(anio: int, db: Session) -> list[PuntoZo
         )
 
     return zonas
+
+
+# ---------------------------------------------------------------------------------------------
+# 3.1 / 3.2 -- puntos (municipio, año) que faltan en mapcalordb, calculados BAJO DEMANDA
+# (claude/fase3-4-umbrales-y-metodos.md). Nada de esto escribe en la base: el calculo vive en
+# techo360-proyeccion (app/services/puntos.py, RPC tipo "puntos") y aqui solo se cachea en Redis
+# (clave proyeccion:v3:punto:{indicador}:{codigo}:{anio}, TTL 36 h) y se recalcula el score.
+# ---------------------------------------------------------------------------------------------
+MAX_LOTE_PUNTOS = 40
+INDICADORES_PUNTOS = frozenset({
+    VARIABLE_ACUEDUCTO,
+    VARIABLE_ALCANTARILLADO,
+    VARIABLE_DEFICIT_COMPUESTO,
+    "deficit_habitacional_cualitativo",
+    INDICADOR_VIGENTE,
+})
+ORIGEN_SCORE_PUNTO = "proyeccion-techo360-score"  # prefijo "proyeccion-": es_proyeccion() = True
+METODO_SCORE_PUNTO = "score-componentes-completados"
+
+
+def _validar_pedido_punto(pedido: dict) -> tuple[str, str, int]:
+    indicador, codigo, anio = pedido.get("indicador"), pedido.get("codigo"), pedido.get("anio")
+    if indicador not in INDICADORES_PUNTOS:
+        raise IndicadorNoSoportadoError(
+            f"Los indicadores soportados son: {', '.join(sorted(INDICADORES_PUNTOS))}."
+        )
+    if not isinstance(codigo, str) or not codigo:
+        raise ValueError("El codigo del municipio debe ser un texto no vacio.")
+    if isinstance(anio, bool) or not isinstance(anio, int):
+        raise ValueError("El año debe ser un entero.")
+    return indicador, codigo, anio
+
+
+async def completar_puntos(pedidos: list[dict]) -> list[dict]:
+    """Completa hasta MAX_LOTE_PUNTOS puntos [{"indicador", "codigo", "anio"}] que faltan en
+    mapcalordb. Cada resultado: {indicador, codigo, anio, estado: "calculado"|"sin_dato", valor,
+    origen, fiabilidad, es_real: False, metodo, motivo}. Primero Redis; los que no estan viajan en UNA
+    solicitud RPC (tipo "puntos") y se guardan. Orden de entrada conservado. Si Redis falla se calcula
+    sin cache (igual que zonas)."""
+    if not isinstance(pedidos, list) or not pedidos:
+        raise ValueError("El lote debe ser una lista no vacia de puntos.")
+    if len(pedidos) > MAX_LOTE_PUNTOS:
+        raise ValueError(f"El lote admite como maximo {MAX_LOTE_PUNTOS} puntos; recibio {len(pedidos)}.")
+    claves = [_validar_pedido_punto(p) for p in pedidos]
+
+    resultados: list[dict | None] = [None] * len(claves)
+    faltan: list[int] = []
+    for i, (indicador, codigo, anio) in enumerate(claves):
+        try:
+            resultados[i] = await proyeccion_cache.obtener_punto(indicador, codigo, anio)
+        except Exception as error:  # noqa: BLE001 -- Redis caido: se sirve sin cache
+            logger.warning("Redis no disponible para el punto %s/%s/%s (%s); se calcula sin cache.", indicador, codigo, anio, error)
+        if resultados[i] is None:
+            faltan.append(i)
+
+    if faltan:
+        # Se piden sin repetir (indicador, codigo, año) y el resultado se reparte a los repetidos.
+        unicos = list(dict.fromkeys(claves[i] for i in faltan))
+        payload = {
+            "tipo": "puntos",
+            "puntos": [{"indicador": ind, "codigo": cod, "anio": an} for ind, cod, an in unicos],
+        }
+        respuesta = await solicitar_proyeccion(payload)
+        if respuesta.get("status") != "ok":
+            detail = respuesta.get("detail") or "El servicio de proyección no está disponible."
+            error_factory = _ERROR_POR_TIPO.get(respuesta.get("tipo"), ModeloNoDisponibleError)
+            raise error_factory(detail)
+        calculados = respuesta.get("puntos") or []
+        if len(calculados) != len(unicos):
+            raise ModeloNoDisponibleError("El servicio de proyección devolvió un número de puntos distinto al pedido.")
+        por_clave = dict(zip(unicos, calculados))
+        for i in faltan:
+            resultados[i] = por_clave[claves[i]]
+        for (indicador, codigo, anio), punto in por_clave.items():
+            try:
+                await proyeccion_cache.guardar_punto(indicador, codigo, anio, punto)
+            except Exception as error:  # noqa: BLE001
+                logger.warning("No se pudo cachear el punto %s/%s/%s: %s", indicador, codigo, anio, error)
+    return resultados
+
+
+def leer_fila_existente(db: Session, indicador: str, codigo: str, anio: int) -> dict | None:
+    """Una fila de mapcalordb (solo lectura) o None."""
+    fila = db.execute(
+        text("""
+            SELECT valuevar, originvar, intervaloconfianza
+            FROM public.mapcalordb
+            WHERE codigodivipola = :codigo AND namevar = :indicador AND yearm = :anio
+            LIMIT 1
+        """),
+        {"codigo": codigo, "indicador": indicador, "anio": anio},
+    ).mappings().first()
+    if fila is None or not _valor_valido(fila["valuevar"]):
+        return None
+    return dict(fila)
+
+
+def _sin_dato_score(codigo: str, anio: int, motivo: str, componentes: list | None = None) -> dict:
+    return {
+        "indicador": INDICADOR_SCORE_PRIVACION, "codigo": codigo, "anio": anio, "estado": "sin_dato",
+        "valor": None, "origen": None, "fiabilidad": None, "es_real": False, "metodo": None,
+        "motivo": motivo, "componentes": componentes or [],
+    }
+
+
+async def calcular_score_punto(
+    codigo: str,
+    anio: int,
+    db: Session,
+    leer_fila=None,
+    completar=None,
+    limites: dict | None = None,
+) -> dict:
+    """Score de privacion de UN municipio-año con los componentes que falten COMPLETADOS bajo demanda.
+
+    Componentes: acueducto, alcantarillado y deficit cuantitativo. Cada uno sale de su fila en BD
+    si existe (cualquier origen) y, si no, de completar_puntos(). Si algun componente queda en
+    sin_dato, el score es sin_dato. Se normalizan con los limites FIJOS de 2024 (igual que
+    calcular_zonas_score_privacion); fiabilidad = minimo de los componentes; es_real siempre False
+    y origen proyeccion-techo360-score. Si ningun componente necesito completarse (no hay hueco)
+    devuelve sin_dato/sin_hueco: ese score lo sirven los caminos existentes."""
+    leer_fila = leer_fila or (lambda variable: asyncio.to_thread(leer_fila_existente, db, variable, codigo, anio))
+    completar = completar or completar_puntos
+    variables = (VARIABLE_ACUEDUCTO, VARIABLE_ALCANTARILLADO, VARIABLE_DEFICIT_COMPUESTO)
+
+    componentes: dict[str, ComponenteScore | None] = {}
+    a_completar: list[str] = []
+    for variable in variables:
+        fila = await leer_fila(variable)
+        if fila is None:
+            a_completar.append(variable)
+            continue
+        origen = fila["originvar"]
+        componentes[variable] = ComponenteScore(
+            variable=variable,
+            valor=float(fila["valuevar"]),
+            origen=origen,
+            es_real=es_real(origen),
+            fiabilidad=fiabilidad_de_origen(origen, fila["intervaloconfianza"]),
+        )
+    if not a_completar:
+        return _sin_dato_score(codigo, anio, "sin_hueco")
+
+    completados = await completar([{"indicador": v, "codigo": codigo, "anio": anio} for v in a_completar])
+    for variable, punto in zip(a_completar, completados):
+        if punto["estado"] != "calculado":
+            return _sin_dato_score(codigo, anio, "componente_sin_dato")
+        componentes[variable] = ComponenteScore(
+            variable=variable, valor=punto["valor"], origen=punto["origen"], es_real=False, fiabilidad=punto["fiabilidad"]
+        )
+
+    if limites is None:
+        limites = await _obtener_limites_base_cacheados(db)
+    indicadores_zona = {
+        v: {"score_normalizado": normalizar_minmax(componentes[v].valor, *limites.get(v, (None, None)))}
+        for v in variables
+    }
+    score = calcular_score_privacion(indicadores_zona)
+    lista = [componentes[v] for v in variables]
+    if score is None:
+        return _sin_dato_score(codigo, anio, "score_no_calculable", [c.model_dump() for c in lista])
+    return {
+        "indicador": INDICADOR_SCORE_PRIVACION, "codigo": codigo, "anio": anio, "estado": "calculado",
+        "valor": score, "origen": ORIGEN_SCORE_PUNTO, "fiabilidad": min(c.fiabilidad for c in lista),
+        "es_real": False, "metodo": METODO_SCORE_PUNTO, "motivo": None,
+        "componentes": [c.model_dump() for c in lista],
+    }
