@@ -82,14 +82,16 @@ class PeticionesInvalidas(unittest.TestCase):
             validar_peticion(p)
         self.assertEqual(cm.exception.tipo, "payload_invalido")
 
-    def test_cuarenta_y_un_contextos(self):
+    def test_veinte_contextos_pasan_y_veintiuno_fallan(self):
+        # Enmienda del 17/10/2026 a fase2-2: contexto de 0 a 20 elementos (antes 40).
         p = copy.deepcopy(_por_nombre(EJEMPLOS["peticiones_v2_validas"], "v2_ejemplo_spec"))
         base = p["contexto"][0]
-        p["contexto"] = [dict(base, id="c%d" % i) for i in range(40)]
+        p["contexto"] = [dict(base, id="c%d" % i) for i in range(20)]
         validar_peticion(p)
-        p["contexto"].append(dict(base, id="c40"))
-        with self.assertRaises(ErrorContrato):
+        p["contexto"].append(dict(base, id="c20"))
+        with self.assertRaises(ErrorContrato) as cm:
             validar_peticion(p)
+        self.assertEqual(cm.exception.tipo, "payload_invalido")
 
     def test_v2_sin_mensaje_no_valida_como_v1(self):
         # Un consumer v1 que reciba un v2 debe fallar (seccion 6, regla 2), no responder sin contexto.

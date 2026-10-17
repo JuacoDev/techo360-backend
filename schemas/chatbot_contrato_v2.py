@@ -31,7 +31,7 @@ from services.origen import es_proyeccion  # misma regla que el chatbot (copia l
 VERSION_CONTRATO_MAXIMA = 2
 MAX_MENSAJES = 12
 MAX_CONTENIDO = 8000
-MAX_CONTEXTO = 40
+MAX_CONTEXTO = 20
 
 TIPOS_ERROR = (
     "cancelado",
