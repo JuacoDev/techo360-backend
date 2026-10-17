@@ -14,6 +14,7 @@ from typing import Annotated, List, Literal, Optional, Union
 
 from pydantic import (
     BaseModel,
+    ConfigDict,
     Field,
     StrictBool,
     StrictFloat,
@@ -73,6 +74,13 @@ class MensajeV2(BaseModel):
     rol: Literal["system", "user", "assistant"]
     contenido: StrictStr = Field(min_length=1, max_length=MAX_CONTENIDO)
 
+    @field_validator("contenido")
+    @classmethod
+    def _no_solo_espacios(cls, v):
+        if not v.strip():
+            raise ValueError("contenido vacio o solo espacios")
+        return v
+
 
 class ContextoItemV2(BaseModel):
     id: StrictStr = Field(min_length=1)
@@ -93,6 +101,8 @@ class ContextoItemV2(BaseModel):
             raise ValueError("valor debe ser numerico para tipo dato/proyeccion")
         if self.es_real and es_proyeccion(self.origen):
             raise ValueError("es_real=true con origen de proyeccion")
+        if self.es_real and self.fiabilidad is not None:
+            raise ValueError("fiabilidad debe ser null cuando es_real=true")
         return self
 
 
@@ -106,6 +116,10 @@ class MetadatosPeticionV2(BaseModel):
 
 
 class PeticionV2(BaseModel):
+    # Claves extra prohibidas SOLO en el nivel superior: un cuerpo con `mensaje` (forma v1) falla.
+    # En contexto y metadatos se siguen ignorando las claves desconocidas.
+    model_config = ConfigDict(extra="forbid")
+
     version_contrato: Literal[2]
     mensajes: List[MensajeV2] = Field(min_length=1, max_length=MAX_MENSAJES)
     contexto: List[ContextoItemV2] = Field(default_factory=list, max_length=MAX_CONTEXTO)

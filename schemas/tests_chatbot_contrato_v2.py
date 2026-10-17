@@ -107,6 +107,75 @@ class PeticionesInvalidas(unittest.TestCase):
         self.assertNotIn("SECRETO-DE-USUARIO", cm.exception.detail)
 
 
+class DecisionesDeEsquema(unittest.TestCase):
+    """Decisiones de Juan/Claude del 17/10/2026 (14:04-14:30) sobre las ambiguedades de la especificacion."""
+
+    def _v2(self):
+        return copy.deepcopy(_por_nombre(EJEMPLOS["peticiones_v2_validas"], "v2_ejemplo_spec"))
+
+    def _error(self, payload):
+        with self.assertRaises(ErrorContrato) as cm:
+            validar_peticion(payload)
+        self.assertEqual(cm.exception.tipo, "payload_invalido")
+
+    def test_1_campos_obligatorios_del_contexto_y_de_los_metadatos(self):
+        for campo in ("id", "tipo", "valor", "origen", "es_real"):
+            with self.subTest("contexto." + campo):
+                p = self._v2()
+                del p["contexto"][0][campo]
+                self._error(p)
+        for campo in ("usuario_id", "consentimiento_entrenamiento"):
+            with self.subTest("metadatos." + campo):
+                p = self._v2()
+                del p["metadatos"][campo]
+                self._error(p)
+        p = self._v2()
+        for campo in ("variable", "codigodivipola", "anio", "unidad", "fuente"):
+            p["contexto"][0].pop(campo)
+        validar_peticion(p)  # el resto del contexto es opcional
+
+    def test_2_contenido_solo_espacios(self):
+        for contenido in (" ", "   ", "\n", "\t \n"):
+            with self.subTest(repr(contenido)):
+                p = self._v2()
+                p["mensajes"][1]["contenido"] = contenido
+                self._error(p)
+        p = self._v2()
+        p["mensajes"][1]["contenido"] = " hola "
+        validar_peticion(p)
+
+    def test_3_extras_solo_prohibidos_en_el_nivel_superior(self):
+        p = self._v2()
+        p["mensaje"] = "hola"  # la forma v1 mezclada con v2
+        self._error(p)
+        p = self._v2()
+        p["otra_clave"] = 1
+        self._error(p)
+        p = self._v2()
+        p["contexto"][0]["extra"] = "x"
+        p["metadatos"]["extra"] = "x"
+        validar_peticion(p)  # en contexto y metadatos se ignoran
+
+    def test_4_fiabilidad_null_si_es_real(self):
+        p = self._v2()
+        p["contexto"][0]["fiabilidad"] = 80  # origen TerriData, es_real=true
+        self._error(p)
+        p = self._v2()
+        p["contexto"][0].update(tipo="proyeccion", origen="proyeccion-ultimo-valor", es_real=False, fiabilidad=62)
+        validar_peticion(p)  # a las proyecciones no se les fuerza nada
+        p["contexto"][0]["fiabilidad"] = None
+        validar_peticion(p)
+
+    def test_5_respuesta_modelo_obligatorio_y_resto_opcional(self):
+        base = {"version_contrato": 2, "status": "ok", "response": "x"}
+        with self.assertRaises(ErrorContrato):
+            validar_respuesta(dict(base, metadatos={}))
+        r = validar_respuesta(dict(base, metadatos={"modelo": "techo360-chatbot:v3.2"}))
+        self.assertIsNone(r.metadatos.digest)
+        self.assertIsNone(r.metadatos.done_reason)
+        self.assertEqual(r.metadatos.contexto_ids, [])
+
+
 class OrigenDeProyeccion(unittest.TestCase):
     def test_tabla_de_casos(self):
         for caso in EJEMPLOS["casos_origen"]:
