@@ -178,12 +178,17 @@ def marcar_error(db: Session, mensaje_id: int, detalle: str, intento: int | None
     return _cambiar(db, mensaje_id, (PENDIENTE, PROCESANDO), ERROR, detalle=detalle, intento=intento)
 
 
-def cerrar_respondido(db: Session, mensaje_id: int, contenido_respuesta: str, intento: int | None = None) -> tuple[Mensaje, Mensaje] | None:
+def cerrar_respondido(
+    db: Session, mensaje_id: int, contenido_respuesta: str, intento: int | None = None, metadatos: dict | None = None
+) -> tuple[Mensaje, Mensaje] | None:
     """procesando -> respondido + guarda la respuesta del asistente, en UNA
     transaccion. Devuelve (mensaje_usuario, mensaje_asistente), o None si el
     mensaje ya no estaba 'procesando' (cancelado/eliminado/barrido mientras el
     asistente pensaba) o si ya hay un intento posterior (`intento` no es el vigente):
-    en ese caso NO se guarda la respuesta."""
+    en ese caso NO se guarda la respuesta.
+
+    `metadatos` (solo el camino v2 del orquestador, 4.8): se guardan en el mensaje del asistente en la MISMA
+    transaccion; con None (por defecto) el comportamiento es el de siempre."""
     condiciones = [Mensaje.id == mensaje_id, Mensaje.rol == "usuario", Mensaje.estado == PROCESANDO]
     if intento is not None:
         condiciones.append(Mensaje.intentos == intento)
@@ -199,6 +204,11 @@ def cerrar_respondido(db: Session, mensaje_id: int, contenido_respuesta: str, in
             return None
         asistente = Mensaje(conversacion_id=usuario.conversacion_id, rol="asistente", contenido=contenido_respuesta, estado=RESPONDIDO)
         db.add(asistente)
+        if metadatos is not None:
+            from services.orquestador.persistencia import aplicar_metadatos
+
+            db.flush()
+            aplicar_metadatos(db, asistente.id, metadatos)
         db.commit()
     except Exception:
         db.rollback()
