@@ -1,0 +1,1581 @@
+{
+ "descripcion": "Ejemplos del contrato RPC v2 (claude/fase2-2-contrato-rpc-v2.md). IDENTICO byte a byte en techo360-backend/schemas/ y techo360-chatbot/app/. error_esperado = tipo de error del contrato.",
+ "peticiones_v1_validas": [
+  {
+   "nombre": "v1_minimo",
+   "payload": {
+    "mensaje": "hola",
+    "usuario_id": 7,
+    "consentimiento_entrenamiento": false
+   }
+  },
+  {
+   "nombre": "v1_completo",
+   "payload": {
+    "mensaje": "hola",
+    "usuario_id": 7,
+    "consentimiento_entrenamiento": true,
+    "conversacion_id": 12,
+    "mensaje_id": 345,
+    "intento": 1
+   }
+  },
+  {
+   "nombre": "v1_con_version_1",
+   "payload": {
+    "version_contrato": 1,
+    "mensaje": "hola",
+    "usuario_id": 7,
+    "consentimiento_entrenamiento": false
+   }
+  }
+ ],
+ "peticiones_v2_validas": [
+  {
+   "nombre": "v2_ejemplo_spec",
+   "payload": {
+    "version_contrato": 2,
+    "mensajes": [
+     {
+      "rol": "system",
+      "contenido": "Eres el asistente virtual de Techo 360."
+     },
+     {
+      "rol": "user",
+      "contenido": "Contexto: cobertura de acueducto en Bucaramanga 2024: 94,2 %.\n\nPregunta: ¿Qué cobertura de acueducto tiene Bucaramanga?"
+     }
+    ],
+    "contexto": [
+     {
+      "id": "c1",
+      "tipo": "dato",
+      "variable": "cobertura_acueducto",
+      "codigodivipola": "68001",
+      "anio": 2024,
+      "valor": 94.2,
+      "unidad": "porcentaje",
+      "origen": "TerriData",
+      "es_real": true,
+      "fiabilidad": null,
+      "fuente": "DNP - TerriData"
+     }
+    ],
+    "metadatos": {
+     "conversacion_id": 12,
+     "mensaje_id": 345,
+     "intento": 1,
+     "usuario_id": 7,
+     "consentimiento_entrenamiento": false,
+     "version_prompt": "sp-0.4.0-1"
+    }
+   }
+  },
+  {
+   "nombre": "v2_sin_contexto",
+   "payload": {
+    "version_contrato": 2,
+    "mensajes": [
+     {
+      "rol": "system",
+      "contenido": "Eres el asistente virtual de Techo 360."
+     },
+     {
+      "rol": "user",
+      "contenido": "Contexto: cobertura de acueducto en Bucaramanga 2024: 94,2 %.\n\nPregunta: ¿Qué cobertura de acueducto tiene Bucaramanga?"
+     }
+    ],
+    "contexto": [],
+    "metadatos": {
+     "conversacion_id": 12,
+     "mensaje_id": 345,
+     "intento": 1,
+     "usuario_id": 7,
+     "consentimiento_entrenamiento": false,
+     "version_prompt": "sp-0.4.0-1"
+    }
+   }
+  },
+  {
+   "nombre": "v2_sin_clave_contexto",
+   "payload": {
+    "version_contrato": 2,
+    "mensajes": [
+     {
+      "rol": "system",
+      "contenido": "Eres el asistente virtual de Techo 360."
+     },
+     {
+      "rol": "user",
+      "contenido": "Contexto: cobertura de acueducto en Bucaramanga 2024: 94,2 %.\n\nPregunta: ¿Qué cobertura de acueducto tiene Bucaramanga?"
+     }
+    ],
+    "metadatos": {
+     "conversacion_id": 12,
+     "mensaje_id": 345,
+     "intento": 1,
+     "usuario_id": 7,
+     "consentimiento_entrenamiento": false,
+     "version_prompt": "sp-0.4.0-1"
+    }
+   }
+  },
+  {
+   "nombre": "v2_proyeccion_y_fragmento",
+   "payload": {
+    "version_contrato": 2,
+    "mensajes": [
+     {
+      "rol": "system",
+      "contenido": "Eres el asistente virtual de Techo 360."
+     },
+     {
+      "rol": "user",
+      "contenido": "Contexto: cobertura de acueducto en Bucaramanga 2024: 94,2 %.\n\nPregunta: ¿Qué cobertura de acueducto tiene Bucaramanga?"
+     }
+    ],
+    "contexto": [
+     {
+      "id": "c1",
+      "tipo": "dato",
+      "variable": "cobertura_acueducto",
+      "codigodivipola": "68001",
+      "anio": 2024,
+      "valor": 94.2,
+      "unidad": "porcentaje",
+      "origen": "TerriData",
+      "es_real": true,
+      "fiabilidad": null,
+      "fuente": "DNP - TerriData"
+     },
+     {
+      "id": "c2",
+      "tipo": "proyeccion",
+      "variable": "deficit_total",
+      "codigodivipola": "68001",
+      "anio": 2030,
+      "valor": 31,
+      "unidad": "porcentaje",
+      "origen": "proyeccion-ultimo-valor",
+      "es_real": false,
+      "fiabilidad": 62,
+      "fuente": "Techo 360 - proyeccion"
+     },
+     {
+      "id": "c3",
+      "tipo": "fragmento",
+      "variable": null,
+      "codigodivipola": null,
+      "anio": null,
+      "valor": "Texto del fragmento de politica publica.",
+      "unidad": null,
+      "origen": "rag-politica",
+      "es_real": true,
+      "fiabilidad": null,
+      "fuente": "Ley 3 de 1991"
+     }
+    ],
+    "metadatos": {
+     "conversacion_id": 12,
+     "mensaje_id": 345,
+     "intento": 1,
+     "usuario_id": 7,
+     "consentimiento_entrenamiento": false,
+     "version_prompt": "sp-0.4.0-1"
+    }
+   }
+  },
+  {
+   "nombre": "v2_con_historial",
+   "payload": {
+    "version_contrato": 2,
+    "mensajes": [
+     {
+      "rol": "system",
+      "contenido": "Eres el asistente virtual de Techo 360."
+     },
+     {
+      "rol": "user",
+      "contenido": "hola"
+     },
+     {
+      "rol": "assistant",
+      "contenido": "Hola, ¿en qué te ayudo?"
+     },
+     {
+      "rol": "user",
+      "contenido": "Contexto: cobertura de acueducto en Bucaramanga 2024: 94,2 %.\n\nPregunta: ¿Qué cobertura de acueducto tiene Bucaramanga?"
+     }
+    ],
+    "contexto": [
+     {
+      "id": "c1",
+      "tipo": "dato",
+      "variable": "cobertura_acueducto",
+      "codigodivipola": "68001",
+      "anio": 2024,
+      "valor": 94.2,
+      "unidad": "porcentaje",
+      "origen": "TerriData",
+      "es_real": true,
+      "fiabilidad": null,
+      "fuente": "DNP - TerriData"
+     }
+    ],
+    "metadatos": {
+     "conversacion_id": 12,
+     "mensaje_id": 345,
+     "intento": 1,
+     "usuario_id": 7,
+     "consentimiento_entrenamiento": false,
+     "version_prompt": "sp-0.4.0-1"
+    }
+   }
+  },
+  {
+   "nombre": "v2_metadatos_minimos",
+   "payload": {
+    "version_contrato": 2,
+    "mensajes": [
+     {
+      "rol": "system",
+      "contenido": "Eres el asistente virtual de Techo 360."
+     },
+     {
+      "rol": "user",
+      "contenido": "Contexto: cobertura de acueducto en Bucaramanga 2024: 94,2 %.\n\nPregunta: ¿Qué cobertura de acueducto tiene Bucaramanga?"
+     }
+    ],
+    "contexto": [
+     {
+      "id": "c1",
+      "tipo": "dato",
+      "variable": "cobertura_acueducto",
+      "codigodivipola": "68001",
+      "anio": 2024,
+      "valor": 94.2,
+      "unidad": "porcentaje",
+      "origen": "TerriData",
+      "es_real": true,
+      "fiabilidad": null,
+      "fuente": "DNP - TerriData"
+     }
+    ],
+    "metadatos": {
+     "usuario_id": 7,
+     "consentimiento_entrenamiento": true
+    }
+   }
+  },
+  {
+   "nombre": "v2_doce_mensajes",
+   "payload": {
+    "version_contrato": 2,
+    "mensajes": [
+     {
+      "rol": "system",
+      "contenido": "Eres el asistente virtual de Techo 360."
+     },
+     {
+      "rol": "user",
+      "contenido": "x"
+     },
+     {
+      "rol": "assistant",
+      "contenido": "x"
+     },
+     {
+      "rol": "user",
+      "contenido": "x"
+     },
+     {
+      "rol": "assistant",
+      "contenido": "x"
+     },
+     {
+      "rol": "user",
+      "contenido": "x"
+     },
+     {
+      "rol": "assistant",
+      "contenido": "x"
+     },
+     {
+      "rol": "user",
+      "contenido": "x"
+     },
+     {
+      "rol": "assistant",
+      "contenido": "x"
+     },
+     {
+      "rol": "user",
+      "contenido": "x"
+     },
+     {
+      "rol": "assistant",
+      "contenido": "x"
+     },
+     {
+      "rol": "user",
+      "contenido": "Contexto: cobertura de acueducto en Bucaramanga 2024: 94,2 %.\n\nPregunta: ¿Qué cobertura de acueducto tiene Bucaramanga?"
+     }
+    ],
+    "contexto": [
+     {
+      "id": "c1",
+      "tipo": "dato",
+      "variable": "cobertura_acueducto",
+      "codigodivipola": "68001",
+      "anio": 2024,
+      "valor": 94.2,
+      "unidad": "porcentaje",
+      "origen": "TerriData",
+      "es_real": true,
+      "fiabilidad": null,
+      "fuente": "DNP - TerriData"
+     }
+    ],
+    "metadatos": {
+     "conversacion_id": 12,
+     "mensaje_id": 345,
+     "intento": 1,
+     "usuario_id": 7,
+     "consentimiento_entrenamiento": false,
+     "version_prompt": "sp-0.4.0-1"
+    }
+   }
+  }
+ ],
+ "peticiones_invalidas": [
+  {
+   "nombre": "version_contrato_3",
+   "payload": {
+    "version_contrato": 3,
+    "mensajes": [
+     {
+      "rol": "system",
+      "contenido": "Eres el asistente virtual de Techo 360."
+     },
+     {
+      "rol": "user",
+      "contenido": "Contexto: cobertura de acueducto en Bucaramanga 2024: 94,2 %.\n\nPregunta: ¿Qué cobertura de acueducto tiene Bucaramanga?"
+     }
+    ],
+    "contexto": [
+     {
+      "id": "c1",
+      "tipo": "dato",
+      "variable": "cobertura_acueducto",
+      "codigodivipola": "68001",
+      "anio": 2024,
+      "valor": 94.2,
+      "unidad": "porcentaje",
+      "origen": "TerriData",
+      "es_real": true,
+      "fiabilidad": null,
+      "fuente": "DNP - TerriData"
+     }
+    ],
+    "metadatos": {
+     "conversacion_id": 12,
+     "mensaje_id": 345,
+     "intento": 1,
+     "usuario_id": 7,
+     "consentimiento_entrenamiento": false,
+     "version_prompt": "sp-0.4.0-1"
+    }
+   },
+   "error_esperado": "contrato_no_soportado"
+  },
+  {
+   "nombre": "version_contrato_99",
+   "payload": {
+    "version_contrato": 99,
+    "mensajes": [
+     {
+      "rol": "system",
+      "contenido": "Eres el asistente virtual de Techo 360."
+     },
+     {
+      "rol": "user",
+      "contenido": "Contexto: cobertura de acueducto en Bucaramanga 2024: 94,2 %.\n\nPregunta: ¿Qué cobertura de acueducto tiene Bucaramanga?"
+     }
+    ],
+    "contexto": [
+     {
+      "id": "c1",
+      "tipo": "dato",
+      "variable": "cobertura_acueducto",
+      "codigodivipola": "68001",
+      "anio": 2024,
+      "valor": 94.2,
+      "unidad": "porcentaje",
+      "origen": "TerriData",
+      "es_real": true,
+      "fiabilidad": null,
+      "fuente": "DNP - TerriData"
+     }
+    ],
+    "metadatos": {
+     "conversacion_id": 12,
+     "mensaje_id": 345,
+     "intento": 1,
+     "usuario_id": 7,
+     "consentimiento_entrenamiento": false,
+     "version_prompt": "sp-0.4.0-1"
+    }
+   },
+   "error_esperado": "contrato_no_soportado"
+  },
+  {
+   "nombre": "version_contrato_texto",
+   "payload": {
+    "version_contrato": "2",
+    "mensajes": [
+     {
+      "rol": "system",
+      "contenido": "Eres el asistente virtual de Techo 360."
+     },
+     {
+      "rol": "user",
+      "contenido": "Contexto: cobertura de acueducto en Bucaramanga 2024: 94,2 %.\n\nPregunta: ¿Qué cobertura de acueducto tiene Bucaramanga?"
+     }
+    ],
+    "contexto": [
+     {
+      "id": "c1",
+      "tipo": "dato",
+      "variable": "cobertura_acueducto",
+      "codigodivipola": "68001",
+      "anio": 2024,
+      "valor": 94.2,
+      "unidad": "porcentaje",
+      "origen": "TerriData",
+      "es_real": true,
+      "fiabilidad": null,
+      "fuente": "DNP - TerriData"
+     }
+    ],
+    "metadatos": {
+     "conversacion_id": 12,
+     "mensaje_id": 345,
+     "intento": 1,
+     "usuario_id": 7,
+     "consentimiento_entrenamiento": false,
+     "version_prompt": "sp-0.4.0-1"
+    }
+   },
+   "error_esperado": "payload_invalido"
+  },
+  {
+   "nombre": "version_contrato_cero",
+   "payload": {
+    "version_contrato": 0,
+    "mensajes": [
+     {
+      "rol": "system",
+      "contenido": "Eres el asistente virtual de Techo 360."
+     },
+     {
+      "rol": "user",
+      "contenido": "Contexto: cobertura de acueducto en Bucaramanga 2024: 94,2 %.\n\nPregunta: ¿Qué cobertura de acueducto tiene Bucaramanga?"
+     }
+    ],
+    "contexto": [
+     {
+      "id": "c1",
+      "tipo": "dato",
+      "variable": "cobertura_acueducto",
+      "codigodivipola": "68001",
+      "anio": 2024,
+      "valor": 94.2,
+      "unidad": "porcentaje",
+      "origen": "TerriData",
+      "es_real": true,
+      "fiabilidad": null,
+      "fuente": "DNP - TerriData"
+     }
+    ],
+    "metadatos": {
+     "conversacion_id": 12,
+     "mensaje_id": 345,
+     "intento": 1,
+     "usuario_id": 7,
+     "consentimiento_entrenamiento": false,
+     "version_prompt": "sp-0.4.0-1"
+    }
+   },
+   "error_esperado": "payload_invalido"
+  },
+  {
+   "nombre": "sin_system",
+   "payload": {
+    "version_contrato": 2,
+    "mensajes": [
+     {
+      "rol": "user",
+      "contenido": "Contexto: cobertura de acueducto en Bucaramanga 2024: 94,2 %.\n\nPregunta: ¿Qué cobertura de acueducto tiene Bucaramanga?"
+     }
+    ],
+    "contexto": [
+     {
+      "id": "c1",
+      "tipo": "dato",
+      "variable": "cobertura_acueducto",
+      "codigodivipola": "68001",
+      "anio": 2024,
+      "valor": 94.2,
+      "unidad": "porcentaje",
+      "origen": "TerriData",
+      "es_real": true,
+      "fiabilidad": null,
+      "fuente": "DNP - TerriData"
+     }
+    ],
+    "metadatos": {
+     "conversacion_id": 12,
+     "mensaje_id": 345,
+     "intento": 1,
+     "usuario_id": 7,
+     "consentimiento_entrenamiento": false,
+     "version_prompt": "sp-0.4.0-1"
+    }
+   },
+   "error_esperado": "payload_invalido"
+  },
+  {
+   "nombre": "dos_system",
+   "payload": {
+    "version_contrato": 2,
+    "mensajes": [
+     {
+      "rol": "system",
+      "contenido": "Eres el asistente virtual de Techo 360."
+     },
+     {
+      "rol": "system",
+      "contenido": "otro"
+     },
+     {
+      "rol": "user",
+      "contenido": "Contexto: cobertura de acueducto en Bucaramanga 2024: 94,2 %.\n\nPregunta: ¿Qué cobertura de acueducto tiene Bucaramanga?"
+     }
+    ],
+    "contexto": [
+     {
+      "id": "c1",
+      "tipo": "dato",
+      "variable": "cobertura_acueducto",
+      "codigodivipola": "68001",
+      "anio": 2024,
+      "valor": 94.2,
+      "unidad": "porcentaje",
+      "origen": "TerriData",
+      "es_real": true,
+      "fiabilidad": null,
+      "fuente": "DNP - TerriData"
+     }
+    ],
+    "metadatos": {
+     "conversacion_id": 12,
+     "mensaje_id": 345,
+     "intento": 1,
+     "usuario_id": 7,
+     "consentimiento_entrenamiento": false,
+     "version_prompt": "sp-0.4.0-1"
+    }
+   },
+   "error_esperado": "payload_invalido"
+  },
+  {
+   "nombre": "system_no_primero",
+   "payload": {
+    "version_contrato": 2,
+    "mensajes": [
+     {
+      "rol": "assistant",
+      "contenido": "hola"
+     },
+     {
+      "rol": "system",
+      "contenido": "Eres el asistente virtual de Techo 360."
+     },
+     {
+      "rol": "user",
+      "contenido": "Contexto: cobertura de acueducto en Bucaramanga 2024: 94,2 %.\n\nPregunta: ¿Qué cobertura de acueducto tiene Bucaramanga?"
+     }
+    ],
+    "contexto": [
+     {
+      "id": "c1",
+      "tipo": "dato",
+      "variable": "cobertura_acueducto",
+      "codigodivipola": "68001",
+      "anio": 2024,
+      "valor": 94.2,
+      "unidad": "porcentaje",
+      "origen": "TerriData",
+      "es_real": true,
+      "fiabilidad": null,
+      "fuente": "DNP - TerriData"
+     }
+    ],
+    "metadatos": {
+     "conversacion_id": 12,
+     "mensaje_id": 345,
+     "intento": 1,
+     "usuario_id": 7,
+     "consentimiento_entrenamiento": false,
+     "version_prompt": "sp-0.4.0-1"
+    }
+   },
+   "error_esperado": "payload_invalido"
+  },
+  {
+   "nombre": "ultimo_no_user",
+   "payload": {
+    "version_contrato": 2,
+    "mensajes": [
+     {
+      "rol": "system",
+      "contenido": "Eres el asistente virtual de Techo 360."
+     },
+     {
+      "rol": "user",
+      "contenido": "Contexto: cobertura de acueducto en Bucaramanga 2024: 94,2 %.\n\nPregunta: ¿Qué cobertura de acueducto tiene Bucaramanga?"
+     },
+     {
+      "rol": "assistant",
+      "contenido": "respuesta"
+     }
+    ],
+    "contexto": [
+     {
+      "id": "c1",
+      "tipo": "dato",
+      "variable": "cobertura_acueducto",
+      "codigodivipola": "68001",
+      "anio": 2024,
+      "valor": 94.2,
+      "unidad": "porcentaje",
+      "origen": "TerriData",
+      "es_real": true,
+      "fiabilidad": null,
+      "fuente": "DNP - TerriData"
+     }
+    ],
+    "metadatos": {
+     "conversacion_id": 12,
+     "mensaje_id": 345,
+     "intento": 1,
+     "usuario_id": 7,
+     "consentimiento_entrenamiento": false,
+     "version_prompt": "sp-0.4.0-1"
+    }
+   },
+   "error_esperado": "payload_invalido"
+  },
+  {
+   "nombre": "sin_mensajes",
+   "payload": {
+    "version_contrato": 2,
+    "mensajes": [],
+    "contexto": [
+     {
+      "id": "c1",
+      "tipo": "dato",
+      "variable": "cobertura_acueducto",
+      "codigodivipola": "68001",
+      "anio": 2024,
+      "valor": 94.2,
+      "unidad": "porcentaje",
+      "origen": "TerriData",
+      "es_real": true,
+      "fiabilidad": null,
+      "fuente": "DNP - TerriData"
+     }
+    ],
+    "metadatos": {
+     "conversacion_id": 12,
+     "mensaje_id": 345,
+     "intento": 1,
+     "usuario_id": 7,
+     "consentimiento_entrenamiento": false,
+     "version_prompt": "sp-0.4.0-1"
+    }
+   },
+   "error_esperado": "payload_invalido"
+  },
+  {
+   "nombre": "trece_mensajes",
+   "payload": {
+    "version_contrato": 2,
+    "mensajes": [
+     {
+      "rol": "system",
+      "contenido": "Eres el asistente virtual de Techo 360."
+     },
+     {
+      "rol": "assistant",
+      "contenido": "x"
+     },
+     {
+      "rol": "user",
+      "contenido": "x"
+     },
+     {
+      "rol": "assistant",
+      "contenido": "x"
+     },
+     {
+      "rol": "user",
+      "contenido": "x"
+     },
+     {
+      "rol": "assistant",
+      "contenido": "x"
+     },
+     {
+      "rol": "user",
+      "contenido": "x"
+     },
+     {
+      "rol": "assistant",
+      "contenido": "x"
+     },
+     {
+      "rol": "user",
+      "contenido": "x"
+     },
+     {
+      "rol": "assistant",
+      "contenido": "x"
+     },
+     {
+      "rol": "user",
+      "contenido": "x"
+     },
+     {
+      "rol": "assistant",
+      "contenido": "x"
+     },
+     {
+      "rol": "user",
+      "contenido": "Contexto: cobertura de acueducto en Bucaramanga 2024: 94,2 %.\n\nPregunta: ¿Qué cobertura de acueducto tiene Bucaramanga?"
+     }
+    ],
+    "contexto": [
+     {
+      "id": "c1",
+      "tipo": "dato",
+      "variable": "cobertura_acueducto",
+      "codigodivipola": "68001",
+      "anio": 2024,
+      "valor": 94.2,
+      "unidad": "porcentaje",
+      "origen": "TerriData",
+      "es_real": true,
+      "fiabilidad": null,
+      "fuente": "DNP - TerriData"
+     }
+    ],
+    "metadatos": {
+     "conversacion_id": 12,
+     "mensaje_id": 345,
+     "intento": 1,
+     "usuario_id": 7,
+     "consentimiento_entrenamiento": false,
+     "version_prompt": "sp-0.4.0-1"
+    }
+   },
+   "error_esperado": "payload_invalido"
+  },
+  {
+   "nombre": "rol_desconocido",
+   "payload": {
+    "version_contrato": 2,
+    "mensajes": [
+     {
+      "rol": "system",
+      "contenido": "Eres el asistente virtual de Techo 360."
+     },
+     {
+      "rol": "tool",
+      "contenido": "x"
+     },
+     {
+      "rol": "user",
+      "contenido": "Contexto: cobertura de acueducto en Bucaramanga 2024: 94,2 %.\n\nPregunta: ¿Qué cobertura de acueducto tiene Bucaramanga?"
+     }
+    ],
+    "contexto": [
+     {
+      "id": "c1",
+      "tipo": "dato",
+      "variable": "cobertura_acueducto",
+      "codigodivipola": "68001",
+      "anio": 2024,
+      "valor": 94.2,
+      "unidad": "porcentaje",
+      "origen": "TerriData",
+      "es_real": true,
+      "fiabilidad": null,
+      "fuente": "DNP - TerriData"
+     }
+    ],
+    "metadatos": {
+     "conversacion_id": 12,
+     "mensaje_id": 345,
+     "intento": 1,
+     "usuario_id": 7,
+     "consentimiento_entrenamiento": false,
+     "version_prompt": "sp-0.4.0-1"
+    }
+   },
+   "error_esperado": "payload_invalido"
+  },
+  {
+   "nombre": "contenido_vacio",
+   "payload": {
+    "version_contrato": 2,
+    "mensajes": [
+     {
+      "rol": "system",
+      "contenido": "Eres el asistente virtual de Techo 360."
+     },
+     {
+      "rol": "user",
+      "contenido": ""
+     }
+    ],
+    "contexto": [
+     {
+      "id": "c1",
+      "tipo": "dato",
+      "variable": "cobertura_acueducto",
+      "codigodivipola": "68001",
+      "anio": 2024,
+      "valor": 94.2,
+      "unidad": "porcentaje",
+      "origen": "TerriData",
+      "es_real": true,
+      "fiabilidad": null,
+      "fuente": "DNP - TerriData"
+     }
+    ],
+    "metadatos": {
+     "conversacion_id": 12,
+     "mensaje_id": 345,
+     "intento": 1,
+     "usuario_id": 7,
+     "consentimiento_entrenamiento": false,
+     "version_prompt": "sp-0.4.0-1"
+    }
+   },
+   "error_esperado": "payload_invalido"
+  },
+  {
+   "nombre": "ids_contexto_repetidos",
+   "payload": {
+    "version_contrato": 2,
+    "mensajes": [
+     {
+      "rol": "system",
+      "contenido": "Eres el asistente virtual de Techo 360."
+     },
+     {
+      "rol": "user",
+      "contenido": "Contexto: cobertura de acueducto en Bucaramanga 2024: 94,2 %.\n\nPregunta: ¿Qué cobertura de acueducto tiene Bucaramanga?"
+     }
+    ],
+    "contexto": [
+     {
+      "id": "c1",
+      "tipo": "dato",
+      "variable": "cobertura_acueducto",
+      "codigodivipola": "68001",
+      "anio": 2024,
+      "valor": 94.2,
+      "unidad": "porcentaje",
+      "origen": "TerriData",
+      "es_real": true,
+      "fiabilidad": null,
+      "fuente": "DNP - TerriData"
+     },
+     {
+      "id": "c1",
+      "tipo": "dato",
+      "variable": "cobertura_alcantarillado",
+      "codigodivipola": "68001",
+      "anio": 2024,
+      "valor": 94.2,
+      "unidad": "porcentaje",
+      "origen": "TerriData",
+      "es_real": true,
+      "fiabilidad": null,
+      "fuente": "DNP - TerriData"
+     }
+    ],
+    "metadatos": {
+     "conversacion_id": 12,
+     "mensaje_id": 345,
+     "intento": 1,
+     "usuario_id": 7,
+     "consentimiento_entrenamiento": false,
+     "version_prompt": "sp-0.4.0-1"
+    }
+   },
+   "error_esperado": "payload_invalido"
+  },
+  {
+   "nombre": "fiabilidad_101",
+   "payload": {
+    "version_contrato": 2,
+    "mensajes": [
+     {
+      "rol": "system",
+      "contenido": "Eres el asistente virtual de Techo 360."
+     },
+     {
+      "rol": "user",
+      "contenido": "Contexto: cobertura de acueducto en Bucaramanga 2024: 94,2 %.\n\nPregunta: ¿Qué cobertura de acueducto tiene Bucaramanga?"
+     }
+    ],
+    "contexto": [
+     {
+      "id": "c1",
+      "tipo": "proyeccion",
+      "variable": "cobertura_acueducto",
+      "codigodivipola": "68001",
+      "anio": 2024,
+      "valor": 94.2,
+      "unidad": "porcentaje",
+      "origen": "proyeccion-ultimo-valor",
+      "es_real": false,
+      "fiabilidad": 101,
+      "fuente": "DNP - TerriData"
+     }
+    ],
+    "metadatos": {
+     "conversacion_id": 12,
+     "mensaje_id": 345,
+     "intento": 1,
+     "usuario_id": 7,
+     "consentimiento_entrenamiento": false,
+     "version_prompt": "sp-0.4.0-1"
+    }
+   },
+   "error_esperado": "payload_invalido"
+  },
+  {
+   "nombre": "fiabilidad_negativa",
+   "payload": {
+    "version_contrato": 2,
+    "mensajes": [
+     {
+      "rol": "system",
+      "contenido": "Eres el asistente virtual de Techo 360."
+     },
+     {
+      "rol": "user",
+      "contenido": "Contexto: cobertura de acueducto en Bucaramanga 2024: 94,2 %.\n\nPregunta: ¿Qué cobertura de acueducto tiene Bucaramanga?"
+     }
+    ],
+    "contexto": [
+     {
+      "id": "c1",
+      "tipo": "proyeccion",
+      "variable": "cobertura_acueducto",
+      "codigodivipola": "68001",
+      "anio": 2024,
+      "valor": 94.2,
+      "unidad": "porcentaje",
+      "origen": "proyeccion-ultimo-valor",
+      "es_real": false,
+      "fiabilidad": -1,
+      "fuente": "DNP - TerriData"
+     }
+    ],
+    "metadatos": {
+     "conversacion_id": 12,
+     "mensaje_id": 345,
+     "intento": 1,
+     "usuario_id": 7,
+     "consentimiento_entrenamiento": false,
+     "version_prompt": "sp-0.4.0-1"
+    }
+   },
+   "error_esperado": "payload_invalido"
+  },
+  {
+   "nombre": "fiabilidad_decimal",
+   "payload": {
+    "version_contrato": 2,
+    "mensajes": [
+     {
+      "rol": "system",
+      "contenido": "Eres el asistente virtual de Techo 360."
+     },
+     {
+      "rol": "user",
+      "contenido": "Contexto: cobertura de acueducto en Bucaramanga 2024: 94,2 %.\n\nPregunta: ¿Qué cobertura de acueducto tiene Bucaramanga?"
+     }
+    ],
+    "contexto": [
+     {
+      "id": "c1",
+      "tipo": "proyeccion",
+      "variable": "cobertura_acueducto",
+      "codigodivipola": "68001",
+      "anio": 2024,
+      "valor": 94.2,
+      "unidad": "porcentaje",
+      "origen": "proyeccion-ultimo-valor",
+      "es_real": false,
+      "fiabilidad": 50.5,
+      "fuente": "DNP - TerriData"
+     }
+    ],
+    "metadatos": {
+     "conversacion_id": 12,
+     "mensaje_id": 345,
+     "intento": 1,
+     "usuario_id": 7,
+     "consentimiento_entrenamiento": false,
+     "version_prompt": "sp-0.4.0-1"
+    }
+   },
+   "error_esperado": "payload_invalido"
+  },
+  {
+   "nombre": "es_real_con_prefijo_proyeccion",
+   "payload": {
+    "version_contrato": 2,
+    "mensajes": [
+     {
+      "rol": "system",
+      "contenido": "Eres el asistente virtual de Techo 360."
+     },
+     {
+      "rol": "user",
+      "contenido": "Contexto: cobertura de acueducto en Bucaramanga 2024: 94,2 %.\n\nPregunta: ¿Qué cobertura de acueducto tiene Bucaramanga?"
+     }
+    ],
+    "contexto": [
+     {
+      "id": "c1",
+      "tipo": "dato",
+      "variable": "cobertura_acueducto",
+      "codigodivipola": "68001",
+      "anio": 2024,
+      "valor": 94.2,
+      "unidad": "porcentaje",
+      "origen": "proyeccion-poblacion-sobre-area",
+      "es_real": true,
+      "fiabilidad": null,
+      "fuente": "DNP - TerriData"
+     }
+    ],
+    "metadatos": {
+     "conversacion_id": 12,
+     "mensaje_id": 345,
+     "intento": 1,
+     "usuario_id": 7,
+     "consentimiento_entrenamiento": false,
+     "version_prompt": "sp-0.4.0-1"
+    }
+   },
+   "error_esperado": "payload_invalido"
+  },
+  {
+   "nombre": "es_real_con_sufijo_proyeccion",
+   "payload": {
+    "version_contrato": 2,
+    "mensajes": [
+     {
+      "rol": "system",
+      "contenido": "Eres el asistente virtual de Techo 360."
+     },
+     {
+      "rol": "user",
+      "contenido": "Contexto: cobertura de acueducto en Bucaramanga 2024: 94,2 %.\n\nPregunta: ¿Qué cobertura de acueducto tiene Bucaramanga?"
+     }
+    ],
+    "contexto": [
+     {
+      "id": "c1",
+      "tipo": "dato",
+      "variable": "cobertura_acueducto",
+      "codigodivipola": "68001",
+      "anio": 2024,
+      "valor": 94.2,
+      "unidad": "porcentaje",
+      "origen": "TerriData-proyeccion",
+      "es_real": true,
+      "fiabilidad": null,
+      "fuente": "DNP - TerriData"
+     }
+    ],
+    "metadatos": {
+     "conversacion_id": 12,
+     "mensaje_id": 345,
+     "intento": 1,
+     "usuario_id": 7,
+     "consentimiento_entrenamiento": false,
+     "version_prompt": "sp-0.4.0-1"
+    }
+   },
+   "error_esperado": "payload_invalido"
+  },
+  {
+   "nombre": "es_real_con_origen_legado_dane",
+   "payload": {
+    "version_contrato": 2,
+    "mensajes": [
+     {
+      "rol": "system",
+      "contenido": "Eres el asistente virtual de Techo 360."
+     },
+     {
+      "rol": "user",
+      "contenido": "Contexto: cobertura de acueducto en Bucaramanga 2024: 94,2 %.\n\nPregunta: ¿Qué cobertura de acueducto tiene Bucaramanga?"
+     }
+    ],
+    "contexto": [
+     {
+      "id": "c1",
+      "tipo": "dato",
+      "variable": "cobertura_acueducto",
+      "codigodivipola": "68001",
+      "anio": 2024,
+      "valor": 94.2,
+      "unidad": "porcentaje",
+      "origen": "DANE-proyeccion-poblacion-2024",
+      "es_real": true,
+      "fiabilidad": null,
+      "fuente": "DNP - TerriData"
+     }
+    ],
+    "metadatos": {
+     "conversacion_id": 12,
+     "mensaje_id": 345,
+     "intento": 1,
+     "usuario_id": 7,
+     "consentimiento_entrenamiento": false,
+     "version_prompt": "sp-0.4.0-1"
+    }
+   },
+   "error_esperado": "payload_invalido"
+  },
+  {
+   "nombre": "tipo_contexto_desconocido",
+   "payload": {
+    "version_contrato": 2,
+    "mensajes": [
+     {
+      "rol": "system",
+      "contenido": "Eres el asistente virtual de Techo 360."
+     },
+     {
+      "rol": "user",
+      "contenido": "Contexto: cobertura de acueducto en Bucaramanga 2024: 94,2 %.\n\nPregunta: ¿Qué cobertura de acueducto tiene Bucaramanga?"
+     }
+    ],
+    "contexto": [
+     {
+      "id": "c1",
+      "tipo": "otro",
+      "variable": "cobertura_acueducto",
+      "codigodivipola": "68001",
+      "anio": 2024,
+      "valor": 94.2,
+      "unidad": "porcentaje",
+      "origen": "TerriData",
+      "es_real": true,
+      "fiabilidad": null,
+      "fuente": "DNP - TerriData"
+     }
+    ],
+    "metadatos": {
+     "conversacion_id": 12,
+     "mensaje_id": 345,
+     "intento": 1,
+     "usuario_id": 7,
+     "consentimiento_entrenamiento": false,
+     "version_prompt": "sp-0.4.0-1"
+    }
+   },
+   "error_esperado": "payload_invalido"
+  },
+  {
+   "nombre": "valor_texto_en_dato",
+   "payload": {
+    "version_contrato": 2,
+    "mensajes": [
+     {
+      "rol": "system",
+      "contenido": "Eres el asistente virtual de Techo 360."
+     },
+     {
+      "rol": "user",
+      "contenido": "Contexto: cobertura de acueducto en Bucaramanga 2024: 94,2 %.\n\nPregunta: ¿Qué cobertura de acueducto tiene Bucaramanga?"
+     }
+    ],
+    "contexto": [
+     {
+      "id": "c1",
+      "tipo": "dato",
+      "variable": "cobertura_acueducto",
+      "codigodivipola": "68001",
+      "anio": 2024,
+      "valor": "94,2",
+      "unidad": "porcentaje",
+      "origen": "TerriData",
+      "es_real": true,
+      "fiabilidad": null,
+      "fuente": "DNP - TerriData"
+     }
+    ],
+    "metadatos": {
+     "conversacion_id": 12,
+     "mensaje_id": 345,
+     "intento": 1,
+     "usuario_id": 7,
+     "consentimiento_entrenamiento": false,
+     "version_prompt": "sp-0.4.0-1"
+    }
+   },
+   "error_esperado": "payload_invalido"
+  },
+  {
+   "nombre": "sin_metadatos",
+   "payload": {
+    "version_contrato": 2,
+    "mensajes": [
+     {
+      "rol": "system",
+      "contenido": "Eres el asistente virtual de Techo 360."
+     },
+     {
+      "rol": "user",
+      "contenido": "Contexto: cobertura de acueducto en Bucaramanga 2024: 94,2 %.\n\nPregunta: ¿Qué cobertura de acueducto tiene Bucaramanga?"
+     }
+    ],
+    "contexto": [
+     {
+      "id": "c1",
+      "tipo": "dato",
+      "variable": "cobertura_acueducto",
+      "codigodivipola": "68001",
+      "anio": 2024,
+      "valor": 94.2,
+      "unidad": "porcentaje",
+      "origen": "TerriData",
+      "es_real": true,
+      "fiabilidad": null,
+      "fuente": "DNP - TerriData"
+     }
+    ]
+   },
+   "error_esperado": "payload_invalido"
+  },
+  {
+   "nombre": "metadatos_sin_usuario_id",
+   "payload": {
+    "version_contrato": 2,
+    "mensajes": [
+     {
+      "rol": "system",
+      "contenido": "Eres el asistente virtual de Techo 360."
+     },
+     {
+      "rol": "user",
+      "contenido": "Contexto: cobertura de acueducto en Bucaramanga 2024: 94,2 %.\n\nPregunta: ¿Qué cobertura de acueducto tiene Bucaramanga?"
+     }
+    ],
+    "contexto": [
+     {
+      "id": "c1",
+      "tipo": "dato",
+      "variable": "cobertura_acueducto",
+      "codigodivipola": "68001",
+      "anio": 2024,
+      "valor": 94.2,
+      "unidad": "porcentaje",
+      "origen": "TerriData",
+      "es_real": true,
+      "fiabilidad": null,
+      "fuente": "DNP - TerriData"
+     }
+    ],
+    "metadatos": {
+     "conversacion_id": 12,
+     "mensaje_id": 345,
+     "intento": 1,
+     "consentimiento_entrenamiento": false,
+     "version_prompt": "sp-0.4.0-1"
+    }
+   },
+   "error_esperado": "payload_invalido"
+  },
+  {
+   "nombre": "payload_no_objeto",
+   "payload": [
+    "no",
+    "es",
+    "objeto"
+   ],
+   "error_esperado": "payload_invalido"
+  },
+  {
+   "nombre": "v1_sin_mensaje",
+   "payload": {
+    "usuario_id": 7,
+    "consentimiento_entrenamiento": false
+   },
+   "error_esperado": "payload_invalido"
+  },
+  {
+   "nombre": "v1_sin_usuario_id",
+   "payload": {
+    "mensaje": "hola",
+    "consentimiento_entrenamiento": false
+   },
+   "error_esperado": "payload_invalido"
+  },
+  {
+   "nombre": "v1_sin_consentimiento",
+   "payload": {
+    "mensaje": "hola",
+    "usuario_id": 7
+   },
+   "error_esperado": "payload_invalido"
+  },
+  {
+   "nombre": "v1_mensaje_no_texto",
+   "payload": {
+    "mensaje": 5,
+    "usuario_id": 7,
+    "consentimiento_entrenamiento": false
+   },
+   "error_esperado": "payload_invalido"
+  }
+ ],
+ "respuestas_validas": [
+  {
+   "nombre": "respuesta_ok_spec",
+   "payload": {
+    "version_contrato": 2,
+    "status": "ok",
+    "response": "La cobertura es 94,2 %.",
+    "metadatos": {
+     "modelo": "techo360-chatbot:v3.3",
+     "digest": "sha256:abc123",
+     "done_reason": "stop",
+     "prompt_eval_count": 612,
+     "eval_count": 187,
+     "duracion_ms": 31200,
+     "contexto_ids": [
+      "c1"
+     ]
+    }
+   }
+  },
+  {
+   "nombre": "respuesta_ok_sin_digest",
+   "payload": {
+    "version_contrato": 2,
+    "status": "ok",
+    "response": "Texto.",
+    "metadatos": {
+     "modelo": "techo360-chatbot:v3.2"
+    }
+   }
+  },
+  {
+   "nombre": "respuesta_error_cancelado",
+   "payload": {
+    "version_contrato": 2,
+    "status": "error",
+    "tipo": "cancelado",
+    "detail": "detalle"
+   }
+  },
+  {
+   "nombre": "respuesta_error_ollama_no_disponible",
+   "payload": {
+    "version_contrato": 2,
+    "status": "error",
+    "tipo": "ollama_no_disponible",
+    "detail": "detalle"
+   }
+  },
+  {
+   "nombre": "respuesta_error_payload_invalido",
+   "payload": {
+    "version_contrato": 2,
+    "status": "error",
+    "tipo": "payload_invalido",
+    "detail": "detalle"
+   }
+  },
+  {
+   "nombre": "respuesta_error_contrato_no_soportado",
+   "payload": {
+    "version_contrato": 2,
+    "status": "error",
+    "tipo": "contrato_no_soportado",
+    "detail": "detalle"
+   }
+  },
+  {
+   "nombre": "respuesta_error_contexto_excedido",
+   "payload": {
+    "version_contrato": 2,
+    "status": "error",
+    "tipo": "contexto_excedido",
+    "detail": "detalle"
+   }
+  },
+  {
+   "nombre": "respuesta_error_error_interno",
+   "payload": {
+    "version_contrato": 2,
+    "status": "error",
+    "tipo": "error_interno",
+    "detail": "detalle"
+   }
+  }
+ ],
+ "respuestas_invalidas": [
+  {
+   "nombre": "respuesta_sin_status",
+   "payload": {
+    "version_contrato": 2,
+    "response": "x",
+    "metadatos": {
+     "modelo": "m"
+    }
+   }
+  },
+  {
+   "nombre": "respuesta_ok_sin_metadatos",
+   "payload": {
+    "version_contrato": 2,
+    "status": "ok",
+    "response": "x"
+   }
+  },
+  {
+   "nombre": "respuesta_ok_sin_modelo",
+   "payload": {
+    "version_contrato": 2,
+    "status": "ok",
+    "response": "x",
+    "metadatos": {}
+   }
+  },
+  {
+   "nombre": "respuesta_error_tipo_desconocido",
+   "payload": {
+    "version_contrato": 2,
+    "status": "error",
+    "tipo": "otro",
+    "detail": "x"
+   }
+  },
+  {
+   "nombre": "respuesta_version_1",
+   "payload": {
+    "version_contrato": 1,
+    "status": "ok",
+    "response": "x",
+    "metadatos": {
+     "modelo": "m"
+    }
+   }
+  },
+  {
+   "nombre": "respuesta_conteo_negativo",
+   "payload": {
+    "version_contrato": 2,
+    "status": "ok",
+    "response": "x",
+    "metadatos": {
+     "modelo": "m",
+     "eval_count": -1
+    }
+   }
+  }
+ ],
+ "casos_origen": [
+  {
+   "origen": "proyeccion-poblacion-sobre-area",
+   "es_proyeccion": true
+  },
+  {
+   "origen": "proyeccion-ultimo-valor",
+   "es_proyeccion": true
+  },
+  {
+   "origen": "proyeccion-",
+   "es_proyeccion": true
+  },
+  {
+   "origen": "TerriData-proyeccion",
+   "es_proyeccion": true
+  },
+  {
+   "origen": "-proyeccion",
+   "es_proyeccion": true
+  },
+  {
+   "origen": "DANE-proyeccion-poblacion-2024",
+   "es_proyeccion": true
+  },
+  {
+   "origen": "DANE-proyeccion-poblacion-",
+   "es_proyeccion": true
+  },
+  {
+   "origen": "TerriData",
+   "es_proyeccion": false
+  },
+  {
+   "origen": "DANE",
+   "es_proyeccion": false
+  },
+  {
+   "origen": "DANE-CNPV-2018",
+   "es_proyeccion": false
+  },
+  {
+   "origen": "IGAC-catastro",
+   "es_proyeccion": false
+  },
+  {
+   "origen": "Proyeccion-x",
+   "es_proyeccion": false
+  },
+  {
+   "origen": "proyeccion",
+   "es_proyeccion": false
+  },
+  {
+   "origen": "TerriData-proyeccion-v2",
+   "es_proyeccion": false
+  },
+  {
+   "origen": "",
+   "es_proyeccion": false
+  },
+  {
+   "origen": null,
+   "es_proyeccion": false
+  },
+  {
+   "origen": 123,
+   "es_proyeccion": false
+  }
+ ]
+}
