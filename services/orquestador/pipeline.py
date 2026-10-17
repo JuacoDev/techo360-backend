@@ -14,6 +14,7 @@ tambien falla, o no hay margen, respuesta DETERMINISTA con las lineas del contex
 se entrega ni se guarda (solo cuantas cifras fallaron).
 """
 import asyncio
+import logging
 import time
 from datetime import date
 
@@ -26,6 +27,8 @@ from services.orquestador.orquestador import preparar_consulta
 from services.orquestador.resolutor import cargar_catalogo
 from services.orquestador.sanitizador import sanitizar_texto
 from services.orquestador.validador_cifras import validar_cifras
+
+logger = logging.getLogger(__name__)
 
 RPC_TIMEOUT_S = chatbot_rpc_client.RPC_TIMEOUT_SECONDS
 FACTOR_MARGEN_REGENERACION = 1.3
@@ -133,17 +136,23 @@ async def responder(
         if restante >= FACTOR_MARGEN_REGENERACION * duracion_primera:
             intento = (peticion["metadatos"].get("intento") or 1) + 1
             segunda_peticion = {**peticion, "metadatos": {**peticion["metadatos"], "intento": intento}}
-            segunda, error = await _generar(segunda_peticion, solicitar, max(1.0, restante))
-            if error:
-                return error
-            regeneraciones, final = 1, segunda
-            texto2, grafica2, validacion2 = await revisar(segunda.response)
-            if validacion2["estado"] != "no_validada":
-                ok = True
-                texto, grafica = texto2, grafica2
-                validacion = {"estado": "regenerada", "no_validadas": []}
-            else:
-                no_validadas = validacion2["no_validadas"]
+            regeneraciones = 1
+            try:
+                segunda, error = await _generar(segunda_peticion, solicitar, max(1.0, restante))
+            except Exception as exc:  # noqa: BLE001 -- timeout o fallo de la red en la 2.a generacion
+                logger.warning("La regeneracion fallo (%s): se entrega la respuesta determinista.", exc)
+                segunda, error = None, True
+            if segunda is not None:
+                # El error de la PRIMERA generacion sigue siendo error; el de la segunda no: ya hay un texto
+                # determinista valido que entregar (auditoria 4.10).
+                final = segunda
+                texto2, grafica2, validacion2 = await revisar(segunda.response)
+                if validacion2["estado"] != "no_validada":
+                    ok = True
+                    texto, grafica = texto2, grafica2
+                    validacion = {"estado": "regenerada", "no_validadas": []}
+                else:
+                    no_validadas = validacion2["no_validadas"]
         if not ok:
             texto, grafica = respuesta_determinista(lineas), None
             validacion = {"estado": "abstencion", "no_validadas": no_validadas}
