@@ -599,7 +599,7 @@ class Generador:
         elif tipo == "agregado":
             variable = rng.choice(VARS_6)
             V, v = self.frase_var(variable, sub)
-            con_colombia = rng.random() < 0.6  # D6: >= 40 % de las preguntas nacionales dicen «Colombia»
+            con_colombia = rng.random() < 0.8  # D6: >= 40 % de las preguntas nacionales dicen «Colombia»
             frases = [f for f in pq.AGREGADO if ("Colombia" in f) == con_colombia] or pq.AGREGADO
             p, qid = self.preguntar(sub, frases, v=v, D=rng.choice(DEPARTAMENTOS_AGREGADO), Y=rng.choice([2020, 2022, 2024]))
             ex = {"tipo": "agregado", "variable": variable}
