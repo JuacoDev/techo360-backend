@@ -43,10 +43,10 @@ B1_ANIO = [
     "No cuento con {dato} de {cita} para {anio}: {motivo}. Puedes consultar otro año u otra variable de ese municipio.",
     "Para {anio} no tengo {dato} de {cita}, porque {motivo}. Prefiero decírtelo antes que inventar una cifra; prueba con otro año o con otra variable.",
     "{cita}: {dato} para {anio} no está disponible, ya que {motivo}. No lo voy a completar con una cifra propia.",
-    "No hay {dato} de {cita} para {anio} en esta consulta ({motivo}). Si quieres, consulta otro año u otra variable.",
+    "No tengo {dato} de {cita} para {anio} en esta consulta ({motivo}). Si quieres, consulta otro año u otra variable.",
     "Lo siento, no puedo darte {dato} de {cita} en {anio}: {motivo}. Te sugiero cambiar el año o la variable.",
     "Esta consulta no trae {dato} de {cita} para {anio}, porque {motivo}, y no voy a inventarlo. Puedes probar con otro año.",
-    "No dispongo de {dato} de {cita} en {anio} ({motivo}). Pregúntame por otro año u otra variable de este municipio.",
+    "No cuento con {dato} de {cita} en {anio} ({motivo}). Pregúntame por otro año u otra variable de este municipio.",
     "Sobre {anio}, no tengo información de {nombre} en {cita}: {motivo}. No puedo darte un valor sin respaldo.",
     "No es posible entregarte {dato} de {cita} para {anio}: {motivo}. Prueba con un año distinto o con otra variable.",
     "Para {anio} no tengo {dato} de {cita}; {motivo}. Prefiero no darte un número sin respaldo.",
@@ -93,20 +93,20 @@ B2_MUNICIPIO_EXTRA = [
 B2_MUNICIPIO = B2_MUNICIPIO + B2_MUNICIPIO_EXTRA
 
 B2_AGREGADO = [
-    "Esa consulta pide un dato agregado, como un promedio, un total o un ranking de {varl}, que no tengo en esta consulta. Puedo darte datos de un municipio concreto: dime el municipio y el año.",
-    "No cuento con cálculos agregados ni rankings de {varl} en esta consulta, y no voy a inventarlos. Sí puedo entregarte el dato de un municipio: indícame cuál y el año.",
-    "Un promedio, un total o un orden entre municipios de {varl} no está disponible aquí. Si me dices un municipio y un año, te doy ese dato.",
-    "Ese tipo de resumen de {varl}, de varios municipios o de todo el país, no lo tengo en esta consulta. Pregúntame por un municipio específico.",
-    "No puedo armar rankings ni promedios de {varl} con lo que tengo en esta consulta. Puedo responder por municipio: dime cuál y el año.",
+    "Esa consulta pide un dato agregado, como un promedio, un total o un ranking {de_varl}, que no tengo en esta consulta. Puedo darte datos de un municipio concreto: dime el municipio y el año.",
+    "No cuento con cálculos agregados ni rankings {de_varl} en esta consulta, y no voy a inventarlos. Sí puedo entregarte el dato de un municipio: indícame cuál y el año.",
+    "Un promedio, un total o un orden entre municipios {de_varl} no está disponible aquí. Si me dices un municipio y un año, te doy ese dato.",
+    "Ese tipo de resumen {de_varl}, de varios municipios o de todo el país, no lo tengo en esta consulta. Pregúntame por un municipio específico.",
+    "No puedo armar rankings ni promedios {de_varl} con lo que tengo en esta consulta. Puedo responder por municipio: dime cuál y el año.",
     "Lo que pides requiere comparar o sumar muchos municipios en {varl}, y eso no está en esta consulta. Dame un municipio y te respondo.",
-    "No tengo una cifra agregada de {varl} para darte, y prefiero no calcularla de memoria. Con un municipio y un año sí puedo ayudarte.",
-    "Mi información de {varl} llega municipio por municipio; los promedios, totales y posiciones entre territorios no están en esta consulta.",
-    "Un dato general de {varl} no lo tengo disponible. Si necesitas el de un municipio concreto, escríbeme su nombre y el año.",
+    "No tengo una cifra agregada {de_varl} para darte, y prefiero no calcularla de memoria. Con un municipio y un año sí puedo ayudarte.",
+    "Mi información {de_varl} llega municipio por municipio; los promedios, totales y posiciones entre territorios no están en esta consulta.",
+    "Un dato general {de_varl} no lo tengo disponible. Si necesitas el de un municipio concreto, escríbeme su nombre y el año.",
     "Para {varl} solo puedo consultar un municipio a la vez, no un resumen de muchos. Dime cuál municipio te interesa.",
     "Esa pregunta sobre {varl} necesita un cálculo entre varios municipios que no puedo hacer aquí. Indícame uno y el año, y busco el dato.",
-    "No dispongo de un ranking ni de un promedio de {varl}. Sí puedo darte el valor de un municipio, si me dices cuál y de qué año.",
-    "El resumen que pides de {varl} no está en esta consulta, y no voy a inventarlo. Pídeme el dato de un municipio en particular.",
-    "De {varl} puedo darte el valor de un municipio y un año, pero no totales, promedios ni listas ordenadas de territorios.",
+    "No dispongo de un ranking ni de un promedio {de_varl}. Sí puedo darte el valor de un municipio, si me dices cuál y de qué año.",
+    "El resumen que pides {de_varl} no está en esta consulta, y no voy a inventarlo. Pídeme el dato de un municipio en particular.",
+    "Sobre {varl} puedo darte el valor de un municipio y un año, pero no totales, promedios ni listas ordenadas de territorios.",
 ]
 B2_AJENA_EXTRA = [
     "Eso queda fuera de mi alcance: no es una de las variables de la plataforma. Para un municipio sí puedo darte acueducto, alcantarillado, déficit habitacional, densidad poblacional o Score de Privación.",
@@ -140,55 +140,56 @@ def b2(ctx: lg.Contexto, el: Eleccion, ex: dict) -> tuple[str, str]:
         return f.format(X=ex["X"]), f"B2.m{i}"
     if tipo == "agregado":
         i, f = el.de("B2g", B2_AGREGADO)
-        return f.format(varl=lg.var_frase(ex["variable"])), f"B2.g{i}"
+        return f.format(varl=lg.var_frase(ex["variable"]), de_varl=lg.var_de(ex["variable"])), f"B2.g{i}"
     i, f = el.de("B2a", B2_AJENA)
     return f, f"B2.a{i}"
 
 
 # --------------------------------------------------------------------------- B3: parcial
-B3_CON_CIFRAS = False  # fase5-1 §6.2: en B no hay cifras; el README documenta la alternativa
+B3_CON_CIFRAS = True  # decision del 17/10 (5.3): B3 cita el valor disponible; se valida con 4.5
 
 
-def _tengo(d: lg.Dato, con_cifra: bool) -> str:
-    base = f"{lg.nombre_variable(d.variable)} de {d.cita} para {d.anio}"
-    return f"{base} ({d.texto_valor})" if con_cifra and d.real else base
+def _tengo(d: lg.Dato) -> str:
+    base = f"{lg.nombre_variable(d.variable)} de {d.cita} en {d.anio}: {d.texto_valor}"
+    return base if d.real else base + f" (estimación, con fiabilidad de {d.fiabilidad} %)"
+
+
+B3_FRASES = [
+    "Tengo {tengo}. En cambio, no tengo {no_tengo}, porque {motivo}. No voy a inventar lo que falta.",
+    "Solo puedo responder una parte. Sí cuento con {tengo}; lo demás, {no_tengo}, no está disponible porque {motivo}.",
+    "Respuesta parcial: {tengo}. Pero no hay {no_tengo}, ya que {motivo}; prefiero no completarlo con una cifra propia.",
+    "Esto es lo que sí hay: {tengo}. Lo que falta es {no_tengo}, porque {motivo}.",
+    "Parte de lo que pides sí está: {tengo}. Para {no_tengo} no tengo dato, porque {motivo}.",
+    "Sí tengo {tengo}. No tengo {no_tengo}, porque {motivo}. Si quieres, pregúntame solo por lo que sí tengo.",
+    "De tu consulta puedo darte {tengo}. No puedo darte {no_tengo}: {motivo}.",
+    "Hay datos para una parte: {tengo}. Para el resto, {no_tengo}, no hay dato, ya que {motivo}.",
+]
 
 
 def b3(ctx: lg.Contexto, el: Eleccion, ex: dict) -> tuple[str, str]:
-    ok = ctx.datos
     sd = ctx.sin_datos
     motivo = motivo_llano(sd[0], el)
-    tengo = lg.unir([_tengo(d, B3_CON_CIFRAS) for d in ok])
-    no_tengo = lg.unir([f"{lg.nombre_variable(s.variable)} de {s.municipio} ({s.departamento}) para {s.anio}" for s in sd])
-    plural = len(sd) > 1
-    i, f = el.de("B3", [
-        "Tengo {tengo}, pero no {no_tengo}: {motivo}. No voy a inventar lo que falta; si quieres, pregúntame solo por lo que sí tengo.",
-        "Solo puedo responder una parte: tengo {tengo}. Lo demás, {no_tengo}, no está disponible porque {motivo}.",
-        "Parte de lo que pides sí está: {tengo}. En cambio, {no_tengo} no lo tengo, ya que {motivo}, y prefiero no estimarlo.",
-        "Respuesta parcial: cuento con {tengo}; no tengo {no_tengo} ({motivo}). Puedes consultar otro año u otra variable para completar.",
-        "Hay datos para {tengo}, pero para {no_tengo} no: {motivo}. No lo voy a completar con una cifra propia.",
-        "Puedo atender solo una parte de tu consulta. Sí tengo {tengo}. No tengo {no_tengo}, porque {motivo}.",
-    ])
-    texto = f.format(tengo=tengo, no_tengo=no_tengo, motivo=motivo)
-    if B3_CON_CIFRAS:
-        texto = texto.replace("Tengo", "Tengo").strip()
-    return texto, f"B3.{i}"
+    tengo = unir_pc([_tengo(d) for d in ctx.datos], con_y=False)
+    no_tengo = lg.unir([f"{lg.nombre_variable(s.variable)} de {s.municipio} ({s.departamento}) en {s.anio}" for s in sd])
+    i, f = el.de("B3", B3_FRASES)
+    return f.format(tengo=tengo, no_tengo=no_tengo, motivo=motivo), f"B3.{i}"
 
 
 # --------------------------------------------------------------------------- B4: fuera de rango
 B4_ANTES = [
     "No tengo {dato} de {cita} para {anio}: {motivo}. Prueba con un año dentro del periodo de esa variable.",
-    "Ese año no se puede consultar: {motivo}. Por eso no tengo {dato} de {cita} en {anio}; indícame otro año.",
+    "No se puede consultar {anio}: {motivo}. Por eso no tengo {dato} de {cita}; indícame otro año.",
     "Para {anio}, {nombre} de {cita} no se puede consultar: {motivo}. Prueba con un año más reciente.",
     "No es posible darte {dato} de {cita} en {anio} ({motivo}). Elige otro año y lo reviso.",
     "{anio} está fuera del periodo de esta variable, así que no tengo {dato} de {cita}. Prueba con otro año.",
 ]
 B4_DESPUES = [
-    "No cuento con datos de {cita} para el año que pides: queda más allá de lo que cubre la plataforma. Lo más reciente con dato real es de {anio_ctx}; si quieres, consúltalo.",
-    "Para ese año no tengo información de {nombre} en {cita}; está fuera del periodo que cubre la plataforma. Puedo darte el último año con dato real, {anio_ctx}, si lo pides.",
-    "No hay datos de {nombre} en {cita} para el año solicitado, porque excede el alcance de la plataforma, y no voy a inventar un valor. El último año con dato real es {anio_ctx}.",
-    "Ese año queda demasiado lejos para mis datos de {cita}. Lo más reciente que tengo con dato real es de {anio_ctx}; dime si quieres consultarlo.",
-    "No puedo responder para ese año: no está en el periodo que cubre la plataforma para {nombre} en {cita}. Si te sirve, te doy el último año con dato real, {anio_ctx}, o el de otro año más cercano.",
+    "El dato más reciente que tengo de {nombre} en {cita} es {val} en {anio_ctx}. Para {anio_pedido} no hay información, porque queda más allá de lo que cubre la plataforma.",
+    "No cuento con datos de {nombre} en {cita} para {anio_pedido}, pues excede el alcance de la plataforma. Lo más reciente con dato real es {val} en {anio_ctx}.",
+    "{anio_pedido} queda fuera de lo que cubre la plataforma, así que no puedo darte esa cifra. El último dato real de {nombre} en {cita} es {val}, de {anio_ctx}.",
+    "No tengo información de {nombre} en {cita} para {anio_pedido}, ni voy a inventar un valor. El dato más reciente es {val} en {anio_ctx}.",
+    "No puedo responder para {anio_pedido}: está más allá del periodo que cubre la plataforma. Sí tengo el dato real más reciente de {nombre} en {cita}: {val} en {anio_ctx}.",
+    "Para {anio_pedido} no existe dato en la plataforma. Lo último que tengo de {nombre} en {cita} es {val} en {anio_ctx}, y es un dato real.",
 ]
 
 
@@ -200,7 +201,7 @@ def b4(ctx: lg.Contexto, el: Eleccion, ex: dict) -> tuple[str, str]:
                         motivo=motivo_llano(sd, el), nombre=_nombre(sd.variable)), f"B4.a{i}"
     d = ctx.datos[0]
     i, f = el.de("B4d", B4_DESPUES)
-    return f.format(cita=d.cita, anio_ctx=d.anio, nombre=_nombre(d.variable)), f"B4.d{i}"
+    return f.format(cita=d.cita, anio_ctx=d.anio, anio_pedido=ex["anio_pedido"], val=d.texto_valor, nombre=_nombre(d.variable)), f"B4.d{i}"
 
 
 # --------------------------------------------------------------------------- B5: insistencia

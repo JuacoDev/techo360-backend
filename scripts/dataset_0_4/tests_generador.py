@@ -105,10 +105,10 @@ class Plantillas(unittest.TestCase):
 
     def test_c1_c2_c3_sin_digitos(self):
         el = Eleccion(random.Random(7))
-        for tema in resp_c.C1_CONCEPTO:
-            self.assertFalse(any(ch.isdigit() for ch in resp_c.c1(tema, el)[0]))
-        for palabra in resp_c.C2_DEFINICION:
-            self.assertFalse(any(ch.isdigit() for ch in resp_c.c2(palabra, el)[0]))
+        for concepto in resp_c.C1_CONCEPTO:
+            self.assertFalse(any(ch.isdigit() for ch in resp_c.c1(concepto, "tema", el)[0]))
+        for s in resp_c.C2_SENTIDOS:
+            self.assertFalse(any(ch.isdigit() for ch in resp_c.c2(s["id"], el)[0]))
         for tema, (_, rs) in resp_c.C3_TEMAS.items():
             for r in rs:
                 self.assertFalse(any(ch.isdigit() for ch in r.replace("{Y}", "")), (tema, r))
@@ -117,6 +117,101 @@ class Plantillas(unittest.TestCase):
         for tema, (qs, rs) in resp_c.C3_TEMAS.items():
             self.assertGreaterEqual(len(qs), 3, tema)
             self.assertGreaterEqual(len(rs), 2, tema)
+
+
+class Correcciones5_2b(unittest.TestCase):
+    def _c(self, resp, sub="A1", fam="A", ctx=None, user="CONTEXTO\nSin datos disponibles para esta consulta.\n\nPREGUNTA DEL USUARIO\n?"):
+        c = Candidato(fam, sub, {"pregunta": "?"}, user, resp, "p", "r")
+        c.ctx = ctx or lg.Contexto()
+        c.render = {"items": []}
+        return c
+
+    def test_d1_lint_redaccion(self):
+        for texto, motivo in [("Es el valor de el déficit.", "lint:de_el"), ("Voy a el mercado.", "lint:a_el"),
+                              ("No hay el dato de Pasto.", "lint:no_hay_articulo"), ("Hola. no sé.", "lint:minuscula_tras_punto"),
+                              ("Ese año no está; ese año tampoco.", "lint:ese_anio_repetido"),
+                              ("Respuesta: La plataforma lo dice.", "lint:mayuscula_tras_dos_puntos")]:
+            self.assertEqual(controles.lint(self._c(texto)), motivo, texto)
+        for bien in ("El valor del déficit es 5 %.", "Bogotá, D.C. pertenece a Bogotá, D.C. y sigue.", "No tengo el dato de Pasto.",
+                     "Sucre: Sucre es una moneda.", "Dato (fuente: DNP - TerriData). Sigue."):
+            self.assertIsNone(controles.lint(self._c(bien)), bien)
+
+    def test_d1_lint_acepta_nombres_del_contexto_tras_dos_puntos(self):
+        ctx = lg.Contexto(datos=[dato(mun="Orito", dep="Putumayo")])
+        self.assertIsNone(controles.lint(self._c("En 2022: Orito (Putumayo) tiene 94,2 %.", ctx=ctx)))
+
+    def test_d2_cobertura_de_valores(self):
+        ctx = lg.Contexto(datos=[dato(valor=94.2), dato(valor=91.0, anio=2023)])
+        self.assertIsNone(controles.cobertura(self._c("94,2 % en 2022 y 91,0 % en 2023.", ctx=ctx)))
+        self.assertEqual(controles.cobertura(self._c("Solo 94,2 %.", ctx=ctx)), "cobertura_valor_ausente")
+        self.assertIsNone(controles.cobertura(self._c("sin valores", sub="C1", fam="C", ctx=ctx)))  # solo A, D, E, B3 y B4
+
+    def test_d2_a7_cita_todas_las_lineas_y_el_numero_exacto_de_omitidos(self):
+        ds = [dato(variable="cobertura_acueducto", anio=a, valor=80.0 + a - 2018) for a in range(2018, 2022)] + \
+             [dato(variable="cobertura_alcantarillado", anio=a, valor=60.0 + a - 2018, real=False, fiab=30) for a in range(2018, 2021)]
+        ctx = lg.Contexto(datos=ds, omitidos=13)
+        for i in range(12):
+            texto, _ = resp_a.a7(ctx, Eleccion(random.Random(i)))
+            for d in ds:
+                self.assertIn(d.texto_valor, texto)
+            self.assertRegex(texto, r"[Oo]mitieron 13 datos")
+            self.assertIn("límite de contexto", texto)
+            self.assertNotIn("no incluí", texto.lower())
+            self.assertEqual(texto.count("fiabilidad"), 1)  # una sola mencion de la fiabilidad
+            self.assertIsNone(controles.lint(self._c(texto, sub="A7", ctx=ctx)))
+
+    def test_d4_b3_cita_el_valor_y_b4_cita_valor_y_anio(self):
+        ctx = lg.Contexto(datos=[dato(valor=94.2, anio=2014)],
+                          sin_datos=[lg.SinDato("cobertura_alcantarillado", "Bucaramanga", "Santander", "2014", "no hay datos anteriores suficientes para estimarlo")])
+        for i in range(len(resp_b.B3_FRASES)):
+            texto, _ = resp_b.b3(ctx, Eleccion(random.Random(i)), {})
+            self.assertIn("94,2 %", texto)
+            self.assertIsNone(controles.lint(self._c(texto, sub="B3", fam="B", ctx=ctx)), texto)
+        ctx4 = lg.Contexto(datos=[dato(valor=98.4, anio=2024, impl=True)])
+        for i in range(len(resp_b.B4_DESPUES)):
+            texto, _ = resp_b.b4(ctx4, Eleccion(random.Random(i)), {"tipo": "despues", "anio_pedido": 2050})
+            self.assertIn("98,4 %", texto)
+            self.assertIn("2024", texto)
+            self.assertIn("2050", texto)
+            self.assertIsNone(controles.lint(self._c(texto, sub="B4", fam="B", ctx=ctx4)), texto)
+
+    def test_d3_c2_solo_definicion_o_identificacion(self):
+        import re
+        formas = re.compile(r"^¿(Qué (es|son|significa|quiere decir)|Cuál es el significado de|Quién fue) ")
+        for s in resp_c.C2_SENTIDOS:
+            self.assertTrue(s["fuente"], s["id"])
+            self.assertGreaterEqual(len(s["respuestas"]), 2, s["id"])
+            for q in s["preguntas"]:
+                self.assertRegex(q, formas)
+            for r in s["respuestas"]:
+                self.assertLessEqual(len(re.split(r"(?<=[.!?])\s+", r)), 3, r)
+                self.assertFalse(any(ch.isdigit() for ch in r), r)
+
+    def test_d5_f_cada_tipo_tiene_respuestas_y_privacidad_no_habla_de_cifras(self):
+        from . import resp_def
+        for tipo, rs in resp_def.F_RECHAZOS.items():
+            self.assertGreaterEqual(len(rs), 3, tipo)
+        for r in resp_def.F_RECHAZOS["privacidad"]:
+            self.assertNotIn("cifra", r.lower())
+        texto, _ = resp_def.f_pura(Eleccion(random.Random(1)), "privacidad")
+        self.assertNotIn("cifra", texto.lower())
+
+    def test_d6_c1_el_concepto_es_el_que_se_pregunta(self):
+        from . import preguntas as pq
+        for q, concepto, tema, ofrece in pq.GENERAL:
+            if "densidad" in q.lower():
+                self.assertEqual(concepto, "densidad", q)
+            if "habitantes" in q.lower() or "cuántas personas viven" in q.lower():
+                self.assertNotEqual(concepto, "densidad", q)
+        texto, _ = resp_c.c1(None, "población", Eleccion(random.Random(2)), "poblacion")
+        self.assertNotIn("Como contexto", texto)
+
+    def test_d7_e2_responde_directo_en_parte_de_los_pares(self):
+        from . import resp_def
+        ctx = lg.Contexto(datos=[dato(mun="Colón", dep="Putumayo")])
+        el = Eleccion(random.Random(3))
+        directos = sum(1 for _ in range(50) if resp_def.e2(ctx, el)[1].startswith("E2.directo"))
+        self.assertTrue(15 <= directos <= 25, directos)  # ~40 %
 
 
 class Similitud(unittest.TestCase):
@@ -261,6 +356,16 @@ class ConBase(unittest.TestCase):
                 h1 = hashlib.sha256((Path(d1) / nombre).read_bytes()).hexdigest()
                 h2 = hashlib.sha256((Path(d2) / nombre).read_bytes()).hexdigest()
                 self.assertEqual(h1, h2, nombre)
+
+    def test_d3_cada_pregunta_de_c2_deja_el_bloque_vacio_y_c1_nacional_con_colombia(self):
+        from datetime import date
+        from services.orquestador.resolutor import resolver
+        for s in resp_c.C2_SENTIDOS:
+            for q in s["preguntas"]:
+                r = resolver(q, self.datos.catalogo, date(2026, 10, 17))
+                self.assertEqual((r.municipios, r.aclaracion), ([], None), q)
+        r = resolver("¿Cuántos hogares tienen déficit habitacional en Colombia?", self.datos.catalogo, date(2026, 10, 17))
+        self.assertEqual(r.municipios, [])
 
     def test_semilla_distinta_cambia_el_resultado(self):
         g1 = self.Generador(self.datos, 1, self.reservados, "train")

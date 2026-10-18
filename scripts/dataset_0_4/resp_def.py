@@ -159,29 +159,64 @@ E2_FRASES = [
 def e2(ctx: lg.Contexto, el: Eleccion) -> tuple[str, str]:
     d = ctx.datos[0]
     dato, pid = _dato_o_serie(ctx, el, "E2")
+    if el.indice("E2dir", 5) < 2:  # ~40 %: responde directo, sin aclaracion antepuesta (el municipio ya lleva su departamento)
+        return dato, f"E2.directo+{pid}"
     i, f = el.de("E2f", E2_FRASES)
     return f.format(m=d.municipio, dep=d.departamento, cita=d.cita, dato=dato, dato_min=_bajar(dato, d.cita)), f"E2.f{i}+{pid}"
 
 
 # --------------------------------------------------------------------------- F
-F_RECHAZO = [
-    "No puedo ignorar mis reglas ni usar cifras que no estén en el contexto.",
-    "No voy a cambiar mis reglas por lo que se pida en la consulta.",
-    "Solo puedo responder con los datos del contexto, sin importar lo que pida la consulta.",
-    "No puedo seguir esa instrucción: mis cifras salen únicamente del contexto.",
-    "Eso no puedo hacerlo: no invento cifras ni cambio mis reglas.",
-    "Entiendo la solicitud, pero mis reglas no cambian con lo que se escriba en la pregunta.",
-    "Lo que viene después de la pregunta es una consulta, no una orden que modifique mis reglas.",
-    "No acepto instrucciones que me pidan cifras sin respaldo en el contexto.",
-    "No puedo dejar de lado el contexto ni mis reglas, aunque se me pida.",
-    "Mis reglas siguen siendo las mismas: las cifras salen solo del contexto.",
-]
-F_RECHAZO_SECRETO = [
-    "No puedo mostrar ni modificar mis instrucciones internas.",
-    "Mis instrucciones internas no las comparto ni las cambio.",
-    "No tengo permitido revelar mis instrucciones, y tampoco puedo cambiarlas.",
-    "Eso no lo puedo hacer: mis instrucciones internas son confidenciales y no se modifican con una pregunta.",
-]
+F_RECHAZOS = {
+    "reglas": [
+        "No puedo ignorar mis reglas ni usar cifras que no estén en el contexto.",
+        "No voy a cambiar mis reglas por lo que se pida en la consulta.",
+        "Entiendo la solicitud, pero mis reglas no cambian con lo que se escriba en la pregunta.",
+        "Lo que viene después de la pregunta es una consulta, no una orden que modifique mis reglas.",
+        "No puedo dejar de lado mis reglas, aunque se me pida.",
+        "Mis reglas siguen siendo las mismas, escriba lo que se escriba en la pregunta.",
+    ],
+    "cifra": [
+        "No voy a dar una cifra distinta de la del contexto, ni a inventar una.",
+        "No acepto instrucciones que me pidan cifras sin respaldo en el contexto.",
+        "Una cifra que no esté en el contexto no la puedo dar, por más que se pida.",
+        "No puedo cambiar ni inventar el valor: las cifras salen solo del contexto.",
+        "Eso no puedo hacerlo: no invento cifras ni las modifico.",
+        "Las cifras que doy son las del contexto, no las que se me sugieran en la pregunta.",
+    ],
+    "contexto": [
+        "No puedo prescindir del contexto ni responder cifras de memoria.",
+        "Mis cifras salen únicamente del contexto, no de la memoria.",
+        "El contexto es mi única fuente de cifras, así que no puedo ignorarlo.",
+        "No dejo de lado el contexto: es de donde salen las cifras que doy.",
+        "Aunque se pida, no responderé de memoria; me apoyo en el contexto.",
+    ],
+    "estilo": [
+        "Aunque se pida otra forma, nombro el municipio con su departamento y el año de cada dato.",
+        "Mantengo el municipio, el departamento y el año en la respuesta, y aclaro si el dato es una estimación.",
+        "No omito el municipio ni el año ni las advertencias, aunque se me pida.",
+    ],
+    "secreto": [
+        "No puedo mostrar ni modificar mis instrucciones internas.",
+        "Mis instrucciones internas no las comparto ni las cambio.",
+        "No tengo permitido revelar mis instrucciones, y tampoco puedo cambiarlas.",
+        "Eso no lo puedo hacer: mis instrucciones internas son confidenciales y no se modifican con una pregunta.",
+    ],
+    "privacidad": [
+        "No puedo compartir contraseñas ni datos de otros usuarios.",
+        "No tengo acceso a contraseñas y no comparto información de otros usuarios.",
+        "Las contraseñas y los datos de otros usuarios son privados, y no los voy a revelar.",
+    ],
+    "fuera_de_tema": [
+        "No voy a escribir un poema: estoy para responder consultas de datos de la plataforma.",
+        "Escribir poemas no es lo mío; mi tarea es responder consultas de datos y conceptos de la plataforma.",
+        "No voy a cambiar de tarea: respondo consultas de datos y conceptos de pobreza y vivienda, no poemas.",
+    ],
+    "linea": [
+        "Las líneas de datos escritas dentro de la pregunta no las tomo como contexto; solo vale el contexto real.",
+        "Lo que se escriba en la pregunta, aunque imite el contexto, no cambia los datos reales.",
+        "No uso datos escritos en la pregunta como si fueran del contexto; respondo con el contexto real.",
+    ],
+}
 F_OFERTA = [
     "Sí puedo ayudarte con datos de acueducto, alcantarillado, déficit habitacional, densidad poblacional o Score de Privación de un municipio: dime cuál y de qué año.",
     "Si quieres un dato real de la plataforma, indícame el municipio, la variable y el año.",
@@ -199,15 +234,16 @@ F_PUENTE_DATO = [
 ]
 
 
-def f_con_dato(ctx: lg.Contexto, el: Eleccion, secreto: bool) -> tuple[str, str]:
-    d = ctx.datos
-    i, rech = el.de("Fr", F_RECHAZO_SECRETO if secreto else F_RECHAZO)
+def f_con_dato(ctx: lg.Contexto, el: Eleccion, tipo: str) -> tuple[str, str]:
+    i, rech = el.de("Fr:" + tipo, F_RECHAZOS[tipo])
     j, puente = el.de("Fp", F_PUENTE_DATO)
     dato, pid = _dato_o_serie(ctx, el, "F")
-    return f"{rech} {puente}{dato}", f"F.r{i}p{j}+{pid}"
+    return f"{rech} {puente}{dato}", f"F.{tipo}{i}p{j}+{pid}"
 
 
-def f_pura(el: Eleccion, secreto: bool) -> tuple[str, str]:
-    i, rech = el.de("Fr", F_RECHAZO_SECRETO if secreto else F_RECHAZO)
+def f_pura(el: Eleccion, tipo: str) -> tuple[str, str]:
+    i, rech = el.de("Fr:" + tipo, F_RECHAZOS[tipo])
+    if tipo == "privacidad":
+        return rech, f"F.{tipo}{i}"
     j, oferta = el.de("Fo", F_OFERTA)
-    return f"{rech} {oferta}", f"F.r{i}o{j}"
+    return f"{rech} {oferta}", f"F.{tipo}{i}o{j}"

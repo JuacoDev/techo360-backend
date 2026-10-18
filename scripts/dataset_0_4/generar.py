@@ -283,9 +283,12 @@ def verificar_dorada_archivos(datos: Datos, rutas: list[Path]) -> tuple[int, lis
     return n, fallos
 
 
-def construir_c0(datos: Datos, tok: Tokenizador, system: str, sha_system: str, base: dict, semilla: int, hold_vec_fn, descartes: collections.Counter):
+def construir_c0(datos: Datos, tok: Tokenizador, system: str, sha_system: str, base: dict, semilla: int, hold_vec_fn, descartes: collections.Counter,
+                 retirar_colombia: bool = False):
     from .tokens import prompt_hasta_asistente
+    from services.orquestador.resolutor import normalizar, resolver
     filas, informativos = [], collections.Counter()
+    informativos["retirados"] = []
     pendientes = []
     for i, p in enumerate(base["train"], start=1):
         entrada = {"pregunta": p["instruction"], "municipios": [], "variables": [], "anios": [], "anio_implicito": True}
@@ -302,13 +305,18 @@ def construir_c0(datos: Datos, tok: Tokenizador, system: str, sha_system: str, b
         if resp > MAX_TOKENS_RESPUESTA:
             descartes[("C0", "control:tokens_respuesta>400")] += 1
             continue
-        # produccion armaria contexto para esta pregunta? (informativo; C0 es obligatorio con bloque vacio)
-        from services.orquestador.resolutor import resolver
+        # D8: se retiran los pares cuya pregunta resuelve un municipio en produccion (llevaria lineas de contexto, no bloque vacio)
         r = resolver(p["instruction"], datos.catalogo, HOY)
+        motivo = None
         if r.municipios:
-            informativos["c0_pregunta_con_municipio_resuelto"] += 1
-        if r.aclaracion:
-            informativos["c0_pregunta_con_aclaracion"] += 1
+            motivo = "la pregunta resuelve un municipio: " + ", ".join(m["nombre"] for m in r.municipios)
+        elif r.aclaracion:
+            motivo = "la pregunta activa una aclaracion: " + r.aclaracion["tipo"]
+        elif retirar_colombia and "colombia" in normalizar(p["instruction"]).split():
+            motivo = "contaba como municipio antes de H1 (Colombia, Huila); se retira por la decision del 17/10 (C0 = 727)"
+        if motivo:
+            informativos["retirados"].append({"id": f"n52-C0-{i:04d}", "id_origen": p.get("id"), "pregunta": p["instruction"], "motivo": motivo})
+            continue
         c = Candidato("C", "C0", entrada, user, p["response"], "base", "base", {"tokens_prompt": total, "tokens_respuesta": resp})
         r_ = fila(c, i, semilla, sha_system)
         r_["id"] = f"n52-C0-{i:04d}"
@@ -340,8 +348,9 @@ def main(argv=None):
     ap.add_argument("--base-ref", default="origin/feat/dataset-0.4.0-base")
     ap.add_argument("--escala", type=float, default=1.0, help="multiplica las cuotas (pruebas rapidas)")
     ap.add_argument("--hilos", type=int, default=8)
-    ap.add_argument("--b3-con-cifras", action="store_true", help="B3 cita el dato disponible (desviacion de fase5-1 §6.2; apagado por defecto)")
+    ap.add_argument("--b3-sin-cifras", action="store_true", help="B3 no cita el dato disponible (literal de fase5-1 §6.2; la decision del 17/10 es citarlo)")
     ap.add_argument("--sin-informe", action="store_true")
+    ap.add_argument("--c0-retirar-colombia", action="store_true", help="retira tambien los 69 pares de C0 que solo contaban como municipio por «Colombia» (C0 = 727)")
     ap.add_argument("--sin-c0", action="store_true", help="no reenvuelve el train base (pruebas rapidas)")
     ap.add_argument("--cache-tokens", type=Path, default=None, help="archivo de cache de conteos de tokens (por defecto, dentro de --salida)")
     args = ap.parse_args(argv)
@@ -363,7 +372,7 @@ def main(argv=None):
     hold_prev = [p["instruction"] for p in base["holdout_v3_3"]] + [p["instruction"] for p in base["holdout_v0_4"]]
 
     # --- holdout contextual (municipios reservados)
-    gen_h = Generador(datos, args.semilla, set(reservados), "holdout", args.b3_con_cifras)
+    gen_h = Generador(datos, args.semilla, set(reservados), "holdout", not args.b3_sin_cifras)
     cuotas_h = {s: escala(v[2]) for s, v in PLAN.items()}
     motor_h = Motor(datos, gen_h, tok, system, hold_prev, "holdout", cuotas_h)
     for fam in FAMILIAS:
@@ -371,7 +380,7 @@ def main(argv=None):
     hold_ctx = [c for s in PLAN for c in motor_h.aceptados.get(s, [])]
 
     # --- train nuevo
-    gen_t = Generador(datos, args.semilla, set(reservados), "train", args.b3_con_cifras)
+    gen_t = Generador(datos, args.semilla, set(reservados), "train", not args.b3_sin_cifras)
     cuotas_t = {s: escala(v[1]) for s, v in PLAN.items()}
     todas_hold = hold_prev + [c.entrada["pregunta"] for c in hold_ctx]
     motor_t = Motor(datos, gen_t, tok, system, todas_hold, "train", cuotas_t)
@@ -383,7 +392,9 @@ def main(argv=None):
     descartes_c0: collections.Counter = collections.Counter()
     if args.sin_c0:
         base = {**base, "train": []}
-    c0_filas, c0_info = construir_c0(datos, tok, system, sha_system, base, args.semilla, None, descartes_c0)
+    c0_filas, c0_info = construir_c0(datos, tok, system, sha_system, base, args.semilla, None, descartes_c0, args.c0_retirar_colombia)
+    (salida / "c0_retirados.json").write_text(json.dumps({"n": len(c0_info["retirados"]), "pares": c0_info["retirados"]}, ensure_ascii=False, indent=1) + "\n",
+                                              encoding="utf-8", newline="\n")
 
     # --- archivos
     filas_nuevos = [fila(c, i, args.semilla, sha_system) for s in PLAN for i, c in enumerate(motor_t.aceptados[s], start=1)]

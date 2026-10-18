@@ -20,6 +20,16 @@ MARKDOWN = re.compile(r"(\*\*|__|`|^#{1,6}\s|^\s*[-*•]\s|^\s*\d+[.)]\s|\[[^\]]
 REPO_SIN_PREFIJO = re.compile(r"(?<!techo360-)\b(ai-service|proyeccion-service)\b", re.IGNORECASE)
 PALABRAS_B = ("aproximadamente", "estimo", "alrededor", "cerca de")
 MAX_PALABRAS = 140
+MAX_PALABRAS_SUB = {"A7": 220}  # D2: la respuesta de A7 cita todas las lineas del contexto
+# Nombres propios que pueden seguir a «: » con mayuscula (C2 y fuentes); los municipios y departamentos del contexto tambien
+PROPIOS_TRAS_DOS_PUNTOS = ("Venecia", "Sucre", "Caldas", "Florida", "Granada", "Antonio", "Simón", "Francisco", "Gonzalo", "Santa", "Manizales",
+                           "Sincelejo", "Italia", "España", "Ecuador", "Nicaragua", "Venezuela", "Córdoba", "Bolívar", "Nariño", "Providencia")
+LINT = (
+    (re.compile(r"\b[Dd]e el\b"), "lint:de_el"),
+    (re.compile(r"\b[Aa] el\b"), "lint:a_el"),
+    (re.compile(r"\b[Nn]o hay (el|la|los|las)\b"), "lint:no_hay_articulo"),
+    (re.compile(r"(?<!D\.C)(?<![0-9])\. [a-záéíóúñ]"), "lint:minuscula_tras_punto"),
+)
 
 
 def dorada(datos, c) -> str | None:
@@ -39,7 +49,7 @@ def cifras(c, b3_con_cifras: bool = False) -> str | None:
     texto, fam = c.respuesta, c.familia
     pregunta = c.entrada["pregunta"]
     lineas = _lineas_validador(c)
-    usa_validador = fam in ("A", "D", "E", "F") or (c.subfamilia == "B3" and b3_con_cifras)
+    usa_validador = fam in ("A", "D", "E", "F") or (c.subfamilia == "B3" and b3_con_cifras) or (c.subfamilia == "B4" and bool(c.ctx and c.ctx.datos))
     if usa_validador:
         r = validar_cifras(texto, lineas, c.render["items"], pregunta)
         if r["estado"] == "no_validada":
@@ -83,8 +93,45 @@ def forma(c) -> str | None:
         return "espacios_o_saltos"
     if re.search(r"\.\.(?!\.)", t):
         return "doble_punto"
-    if len(t.split()) > MAX_PALABRAS:
+    if len(t.split()) > MAX_PALABRAS_SUB.get(c.subfamilia, MAX_PALABRAS):
         return "respuesta_larga"
+    return None
+
+
+def lint(c) -> str | None:
+    """D1: patrones de redaccion prohibidos en cualquier respuesta."""
+    t = c.respuesta
+    for patron, motivo in LINT:
+        if patron.search(t):
+            return motivo
+    if len(re.findall(r"\bese año\b", t, re.IGNORECASE)) >= 2:
+        return "lint:ese_anio_repetido"
+    ctx = c.ctx
+    nombres = set(PROPIOS_TRAS_DOS_PUNTOS)
+    if ctx is not None:
+        for d in ctx.datos:
+            nombres.update((d.municipio, d.departamento))
+        for s in ctx.sin_datos:
+            nombres.update((s.municipio, s.departamento))
+        for u in ctx.ubicaciones:
+            nombres.update((u.municipio, u.departamento))
+    for m in re.finditer(r": (?=[A-ZÁÉÍÓÚÑ])", t):
+        resto = t[m.end():]
+        if t[:m.start()].endswith("fuente"):
+            continue  # «(fuente: DNP - TerriData)»: nombre de la fuente tal como esta en el contexto
+        if not any(resto.startswith(n) for n in nombres):
+            return "lint:mayuscula_tras_dos_puntos"
+    return None
+
+
+def cobertura(c) -> str | None:
+    """D2: en A, D, E, B3 y B4 con valor, todo valor de las lineas del contexto aparece (literal) en la respuesta."""
+    aplica = c.familia in ("A", "D", "E") or c.subfamilia in ("B3", "B4")
+    if not aplica or c.ctx is None:
+        return None
+    for d in c.ctx.datos:
+        if d.texto_valor.rstrip(".,; ") not in c.respuesta:
+            return "cobertura_valor_ausente"
     return None
 
 
@@ -95,8 +142,6 @@ def reglas_respuesta(c) -> str | None:
     if c.familia not in ("A", "D", "E", "F") or not ctx.datos:
         return None
     muestra = ctx.datos
-    if sub == "A7":
-        return None  # solo se cita una muestra; la forma se prueba en las pruebas del generador
     for d in muestra:
         if d.cita not in t:
             return "falta_municipio_con_departamento"
@@ -116,7 +161,8 @@ def reglas_respuesta(c) -> str | None:
 
 
 def todos(datos, c, b3_con_cifras: bool = False) -> str | None:
-    for f in (lambda: dorada(datos, c), lambda: cifras(c, b3_con_cifras), lambda: palabras_b(c), lambda: forma(c), lambda: reglas_respuesta(c)):
+    for f in (lambda: dorada(datos, c), lambda: cifras(c, b3_con_cifras), lambda: palabras_b(c), lambda: forma(c), lambda: lint(c),
+              lambda: cobertura(c), lambda: reglas_respuesta(c)):
         m = f()
         if m:
             return m

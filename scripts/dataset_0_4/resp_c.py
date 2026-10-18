@@ -7,17 +7,18 @@ from . import lengua as lg
 from .resp_comun import Eleccion
 
 # --------------------------------------------------------------------------- C1: numerica general / nacional
+# {tema}: de que cifra se trata («déficit habitacional», «población»...). Sin digitos ni la marca de la plataforma.
 C1_ABSTENCION = [
-    "No tengo cifras nacionales en esta consulta y no voy a darlas de memoria.",
-    "No dispongo de ese dato en esta consulta, y prefiero no inventarlo.",
-    "Esa cifra no está en la información de esta consulta, así que no puedo darla.",
-    "No cuento con ese dato aquí y no lo voy a completar de memoria.",
-    "En esta consulta no tengo ese número; no lo voy a inventar.",
-    "No puedo darte esa cifra: no aparece en los datos de esta consulta.",
-    "Ese dato agregado no lo tengo disponible en esta consulta, y no lo voy a rellenar de memoria.",
-    "No tengo una cifra confiable para eso en esta consulta.",
-    "Lo siento, no tengo ese número a la mano y no quiero darte uno sin respaldo.",
-    "Esa cantidad no está en esta consulta, y no es algo que deba calcular de memoria.",
+    "No tengo cifras agregadas de {tema} en esta consulta y no voy a darlas de memoria.",
+    "No dispongo de ese dato de {tema} en esta consulta, y prefiero no inventarlo.",
+    "Esa cifra de {tema} no está en la información de esta consulta, así que no puedo darla.",
+    "No cuento con ese dato de {tema} aquí y no lo voy a completar de memoria.",
+    "En esta consulta no tengo ese número de {tema}; no lo voy a inventar.",
+    "No puedo darte esa cifra de {tema}: no aparece en los datos de esta consulta.",
+    "Un dato agregado de {tema}, para el país o para un departamento, no lo tengo disponible en esta consulta.",
+    "No tengo una cifra confiable de {tema} para eso en esta consulta.",
+    "Lo siento, no tengo ese número de {tema} a la mano y no quiero darte uno sin respaldo.",
+    "Esa cantidad de {tema} no está en esta consulta, y no es algo que deba calcular de memoria.",
 ]
 C1_CIERRE = [
     "Si quieres un dato concreto, dime un municipio, una variable y un año.",
@@ -29,132 +30,180 @@ C1_CIERRE = [
     "Con un municipio y una variable puedo darte el dato que tenga la plataforma.",
     "Pregúntame por un municipio y te digo lo que tenga de él.",
 ]
+# La definicion se da solo si es del mismo concepto que pregunta el usuario. Fuente de verdad: system sp-0.4.0-1 regla 6, dataset base 0.4.0, fase3/fase4.
 C1_CONCEPTO = {
     "deficit": [
         "El déficit habitacional tiene dos partes: el cuantitativo mide cuántas viviendas adecuadas faltan frente al número de hogares que necesitan una, y el cualitativo recoge hogares que sí tienen vivienda, pero con carencias de estructura, espacio o servicios públicos.",
-        "Como contexto: el déficit habitacional cuantitativo expresa la insuficiencia de viviendas adecuadas para los hogares, y el cualitativo se refiere a viviendas que existen pero no cumplen estándares de calidad, sin que necesariamente deban reemplazarse.",
+        "Recuerda que el déficit habitacional se divide en cuantitativo, la falta de viviendas adecuadas para los hogares, y cualitativo, viviendas que existen pero no cumplen estándares de calidad.",
+    ],
+    "cuantitativo": [
+        "El déficit habitacional cuantitativo mide cuántas viviendas adecuadas faltan frente al número de hogares que necesitan una.",
+        "El déficit cuantitativo expresa la insuficiencia de viviendas adecuadas para los hogares que las necesitan.",
+    ],
+    "cualitativo": [
+        "El déficit habitacional cualitativo recoge los hogares que sí tienen vivienda, pero con carencias de estructura, espacio o servicios públicos, sin que la vivienda deba reemplazarse necesariamente.",
+        "El déficit cualitativo se refiere a viviendas que existen pero no cumplen estándares de calidad.",
     ],
     "acueducto": [
         "La cobertura de acueducto indica qué proporción de las viviendas de un territorio cuenta con servicio de acueducto.",
-        "Como contexto: la cobertura de acueducto mide qué parte de las viviendas tiene acceso al servicio de acueducto, y es uno de los componentes del Score de Privación.",
+        "La cobertura de acueducto mide qué parte de las viviendas tiene acceso al servicio de acueducto, y es uno de los componentes del Score de Privación.",
     ],
     "alcantarillado": [
         "La cobertura de alcantarillado indica qué proporción de las viviendas de un territorio cuenta con servicio de alcantarillado.",
-        "Como contexto: la cobertura de alcantarillado mide qué parte de las viviendas está conectada al servicio de alcantarillado, y es uno de los componentes del Score de Privación.",
+        "La cobertura de alcantarillado mide qué parte de las viviendas está conectada al servicio de alcantarillado, y es uno de los componentes del Score de Privación.",
     ],
-    "pobreza": [
+    "ipm": [
         "El Índice de Pobreza Multidimensional, o IPM, mide la pobreza más allá del ingreso del hogar: cuenta las privaciones que sufre un hogar en dimensiones como educación, trabajo, salud y condiciones de la vivienda.",
-        "Como contexto: el IPM es el indicador oficial con el que Colombia mide la pobreza a partir de varias privaciones del hogar, no solo del ingreso.",
+        "El IPM es el indicador oficial con el que Colombia mide la pobreza a partir de varias privaciones del hogar, no solo del ingreso.",
     ],
-    "poblacion": [
+    "densidad": [
         "La densidad poblacional es la cantidad de habitantes por kilómetro cuadrado de un territorio; en la plataforma se consulta por municipio.",
-        "Como contexto: La plataforma muestra la densidad poblacional de cada municipio, es decir, cuántos habitantes hay por kilómetro cuadrado.",
+        "La plataforma muestra la densidad poblacional de cada municipio, es decir, cuántos habitantes hay por kilómetro cuadrado.",
     ],
     "score": [
-        "El Score de Privación de la plataforma resume la situación de un municipio a partir de la cobertura de acueducto, la cobertura de alcantarillado y el déficit habitacional cuantitativo; los valores más altos indican mayor privación.",
-        "Como contexto: el Score de Privación combina tres indicadores, acueducto, alcantarillado y déficit habitacional cuantitativo, en un solo valor; cuanto más alto, mayor privación.",
+        "El Score de Privación resume la situación de un municipio a partir de la cobertura de acueducto, la cobertura de alcantarillado y el déficit habitacional cuantitativo; los valores más altos indican mayor privación.",
+        "El Score de Privación combina tres indicadores, acueducto, alcantarillado y déficit habitacional cuantitativo, en un solo valor; cuanto más alto, mayor privación.",
+    ],
+}
+C1_OFRECE = {  # preguntas sin concepto asociado (poblacion total, pobreza monetaria): se ofrece lo que si hay
+    "poblacion": [
+        "De población puedo darte la densidad poblacional de un municipio, que son los habitantes por kilómetro cuadrado.",
+        "Lo que sí consulto de población es la densidad poblacional de cada municipio.",
+    ],
+    "pobreza": [
+        "Si te interesa, puedo explicarte cómo se mide la pobreza multidimensional o darte datos de vivienda y servicios públicos de un municipio.",
+        "Puedo explicarte qué es el IPM o consultar el Score de Privación de un municipio.",
     ],
 }
 
 
-def c1(tema: str, el: Eleccion) -> tuple[str, str]:
+def c1(concepto: str | None, tema: str, el: Eleccion, ofrece: str | None = None) -> tuple[str, str]:
     i, a = el.de("C1a", C1_ABSTENCION)
-    j, c = el.de("C1c:" + tema, C1_CONCEPTO[tema])
+    a = a.format(tema=tema)
     k, z = el.de("C1z", C1_CIERRE)
-    orden = el.indice("C1o", 3)
-    if orden == 0:
-        texto = f"{a} {c} {z}"
-    elif orden == 1:
-        texto = f"{a} {z} {c}"
-    else:
-        texto = f"{c} {a} {z}"
-    return texto, f"C1.a{i:02d}c{j}z{k}o{orden}"
+    if concepto:
+        j, c = el.de("C1c:" + concepto, C1_CONCEPTO[concepto])
+        orden = el.indice("C1o", 3)
+        partes = [(a, c, z), (a, z, c), (c, a, z)][orden]
+        return " ".join(partes), f"C1.a{i:02d}c{concepto}{j}z{k}o{orden}"
+    if ofrece:
+        j, c = el.de("C1f:" + ofrece, C1_OFRECE[ofrece])
+        return f"{a} {c} {z}", f"C1.a{i:02d}f{ofrece}{j}z{k}"
+    return f"{a} {z}", f"C1.a{i:02d}z{k}"
 
 
-# --------------------------------------------------------------------------- C2: palabra comun, no municipio
-C2_DEFINICION = {
-    "pesca": [
-        "La pesca es la actividad de capturar peces y otros animales acuáticos, ya sea para el consumo, el comercio o el deporte.",
-        "Se llama pesca a la captura de peces, moluscos y crustáceos en ríos, lagos y mares; puede ser artesanal, industrial o deportiva.",
-        "La pesca es una actividad económica y de subsistencia que consiste en sacar del agua peces y otras especies para alimentarse o venderlas.",
-    ],
-    "florida": [
-        "Florida, como adjetivo, describe algo que tiene flores o que está lleno de ellas.",
-        "Cuando se dice que una planta o un campo está florido o florida, significa que tiene flores abiertas.",
-        "El adjetivo florida se aplica a lo que está cubierto de flores y, en sentido figurado, a un lenguaje muy adornado.",
-    ],
-    "granada": [
-        "La granada es una fruta de cáscara dura y rojiza, llena de semillas jugosas que se comen directamente o se usan en jugos.",
-        "Es el fruto del granado: tiene una corteza gruesa y, por dentro, muchos granos rojos, dulces y ligeramente ácidos.",
-        "La granada es una fruta originaria de Asia, apreciada por sus semillas jugosas, que se consume fresca o en jugos y salsas.",
-    ],
-    "toro": [
-        "El toro es el macho adulto de la especie bovina, que se cría para la reproducción, el trabajo o la lidia.",
-        "Un toro es un bovino macho sin castrar; se usa como semental para reproducir ganado y, en algunas tradiciones, en la lidia.",
-        "Se llama toro al macho de la vaca cuando ya es adulto y está apto para la reproducción.",
-    ],
-    "hato": [
-        "Un hato es un conjunto de ganado; en Colombia también se llama así a la finca dedicada a criar ganado.",
-        "Hato es el grupo de animales de ganadería, como reses, que se cría y se maneja junto, y también la finca donde se mantiene.",
-        "En el campo colombiano, el hato es la finca ganadera o el conjunto de reses que se cuidan en ella.",
-    ],
-    "sucre": [
-        "El sucre fue la moneda de Ecuador hasta que ese país adoptó el dólar; su nombre honra a Antonio José de Sucre, héroe de la independencia.",
-        "El sucre era la unidad monetaria ecuatoriana, llamada así en homenaje al mariscal Antonio José de Sucre.",
-        "Sucre se llamó la moneda de Ecuador antes de la dolarización, un nombre que recuerda al prócer Antonio José de Sucre.",
-    ],
-    "venecia": [
-        "Venecia es una ciudad del norte de Italia, famosa por sus canales y por un centro histórico construido sobre islas.",
-        "La ciudad italiana de Venecia se levanta sobre una laguna y se recorre por canales, puentes y calles estrechas.",
-        "Venecia, en Italia, es conocida por sus góndolas, sus canales y su carnaval.",
-    ],
-    "palmar": [
-        "Un palmar es un terreno sembrado de palmas, como los cultivos de palma de aceite o de coco.",
-        "Se llama palmar al lugar poblado de palmas, ya sea de forma natural o como cultivo.",
-        "Palmar es el término para un conjunto de palmas sembradas en un mismo terreno.",
-    ],
-    "piedras": [
-        "Las piedras son fragmentos de roca de distintos tamaños; en construcción se usan, por ejemplo, en cimientos y rellenos.",
-        "Piedra es el material rocoso que se encuentra en la naturaleza y se utiliza para construir, decorar y pavimentar.",
-        "Las piedras son trozos de roca, de formas y tamaños variados, que sirven como material de construcción.",
-    ],
-    "caldas": [
-        "Caldas es un departamento de la región andina de Colombia, parte del Eje Cafetero, cuya capital es Manizales.",
-        "El departamento de Caldas está en el centro occidente andino del país y su capital es Manizales.",
-        "Manizales es la capital del departamento de Caldas, ubicado en el Eje Cafetero.",
-    ],
-    "sucre_dep": [
-        "Sucre es un departamento de la región Caribe de Colombia, y su capital es Sincelejo.",
-        "El departamento de Sucre está en el Caribe colombiano y Sincelejo es su capital.",
-        "Sincelejo es la capital del departamento de Sucre, en la región Caribe.",
-    ],
-}
-C2_PUENTE = [
-    "Si te referías al municipio con ese nombre, indícame la variable y el año que quieres consultar.",
-    "Si buscabas un dato de la plataforma, dime un municipio, una variable y un año.",
-    "Si lo que quieres es información de la plataforma, pregúntame por un municipio y una variable.",
-    "Si querías un dato de municipio, escríbeme el nombre, la variable y el año.",
-    "Si necesitas datos de la plataforma, indícame el municipio, la variable y el año.",
-    "Y si más bien buscabas un municipio, dime cuál, qué variable y de qué año.",
+# --------------------------------------------------------------------------- C2: definicion o identificacion
+# Cada sentido: preguntas (solo formas de definicion/identificacion que el resolutor real deja con bloque vacio) y respuestas que
+# contestan exactamente lo preguntado en 1-3 frases. FUENTE DE VERDAD: conocimiento general de definiciones del DLE (RAE) y de
+# historia escolar; REPORTADO por quien lo redacto, NO consultado en linea: pendiente de la revision del 100 % de C2.
+C2_SENTIDOS = [
+    {"id": "pesca", "fuente": "DLE: pesca, captura de peces y otros animales acuaticos",
+     "preguntas": ["¿Qué es la pesca?", "¿Qué significa pesca?", "¿Qué quiere decir pesca?", "¿Cuál es el significado de la palabra pesca?"],
+     "respuestas": ["La pesca es la actividad de capturar peces y otros animales acuáticos.",
+                    "Se llama pesca a la captura de peces, moluscos y crustáceos en ríos, lagos y mares.",
+                    "Pesca es la actividad de sacar del agua peces y otras especies, para alimentarse, venderlos o por deporte."]},
+    {"id": "florida", "fuente": "DLE: florido, da; que tiene flores",
+     "preguntas": ["¿Qué significa florida?", "¿Qué quiere decir florida?", "¿Cuál es el significado de la palabra florida?"],
+     "respuestas": ["Florida es un adjetivo que describe algo que tiene flores o está cubierto de ellas, como una rama florida.",
+                    "El adjetivo florida significa que algo tiene flores, por ejemplo un jardín o una rama.",
+                    "Florida se dice de lo que está lleno de flores; en sentido figurado, de un lenguaje muy adornado."]},
+    {"id": "granada_fruta", "fuente": "DLE: granada, fruto del granado; granada de mano, proyectil explosivo",
+     "preguntas": ["¿Qué es una granada?", "¿Qué significa granada?", "¿Qué quiere decir granada?"],
+     "respuestas": ["Una granada es una fruta de cáscara dura y rojiza, con muchas semillas jugosas en su interior. También se llama así a un explosivo de mano.",
+                    "Granada tiene dos sentidos: la fruta del granado, llena de semillas jugosas, y un arma explosiva pequeña que se lanza a mano.",
+                    "Se llama granada al fruto del granado, de granos rojos y jugosos, y también a un artefacto explosivo que se arroja con la mano."]},
+    {"id": "piedras", "fuente": "DLE: piedra, trozo de roca",
+     "preguntas": ["¿Qué son las piedras?", "¿Qué significa piedras?", "¿Qué quiere decir piedras?", "¿Cuál es el significado de la palabra piedras?"],
+     "respuestas": ["Las piedras son fragmentos de roca de distintos tamaños.",
+                    "Piedras es el plural de piedra, un trozo de roca de cualquier tamaño.",
+                    "Se llama piedras a los fragmentos de roca que se encuentran en la naturaleza."]},
+    {"id": "palmar", "fuente": "DLE: palmar, sitio poblado de palmas",
+     "preguntas": ["¿Qué es un palmar?", "¿Qué significa palmar?", "¿Qué quiere decir palmar?", "¿Cuál es el significado de la palabra palmar?"],
+     "respuestas": ["Un palmar es un lugar poblado de palmas.",
+                    "Palmar es el terreno donde crecen o se cultivan palmas.",
+                    "Se llama palmar a un terreno con muchas palmas, ya sea natural o sembrado."]},
+    {"id": "hato", "fuente": "DLE: hato, porcion de ganado; en America, hacienda destinada a la cria de ganado",
+     "preguntas": ["¿Qué es un hato?", "¿Qué significa hato?", "¿Qué quiere decir hato?", "¿Cuál es el significado de la palabra hato?"],
+     "respuestas": ["Un hato es un conjunto de ganado.",
+                    "Hato significa, en el campo, un grupo de reses; en Colombia y Venezuela también es la finca dedicada a criar ganado.",
+                    "Se llama hato a una porción de ganado y, en varios países de América, a la hacienda donde se cría."]},
+    {"id": "toro", "fuente": "DLE: toro, macho adulto de la vaca",
+     "preguntas": ["¿Qué es un toro?", "¿Qué significa toro?", "¿Qué quiere decir toro?", "¿Cuál es el significado de la palabra toro?"],
+     "respuestas": ["Un toro es el macho adulto de la vaca, un bovino que se usa para la reproducción o la lidia.",
+                    "Toro es el macho de la especie bovina cuando ya es adulto.",
+                    "Se llama toro al bovino macho adulto que no ha sido castrado."]},
+    {"id": "venecia", "fuente": "geografia general: Venecia, ciudad del noreste de Italia sobre una laguna",
+     "preguntas": ["¿Qué es Venecia?", "¿Qué es Venecia, en Italia?"],
+     "respuestas": ["Venecia es una ciudad del noreste de Italia, construida sobre una laguna y famosa por sus canales.",
+                    "Venecia es una ciudad italiana levantada sobre islas en una laguna, conocida por sus canales, puentes y góndolas.",
+                    "Se llama Venecia a la ciudad italiana de los canales, situada en el noreste del país."]},
+    {"id": "sucre_moneda", "fuente": "historia economica: sucre, moneda de Ecuador hasta la dolarizacion",
+     "preguntas": ["¿Qué es el sucre?"],
+     "respuestas": ["El sucre fue la moneda de Ecuador antes de que el país adoptara el dólar.",
+                    "El sucre era la moneda oficial de Ecuador hasta su reemplazo por el dólar estadounidense.",
+                    "Se llamó sucre a la unidad monetaria ecuatoriana anterior al dólar."]},
+    {"id": "sucre_palabra", "fuente": "sucre: moneda de Ecuador y capital constitucional de Bolivia",
+     "preguntas": ["¿Qué significa sucre?", "¿Cuál es el significado de la palabra sucre?"],
+     "respuestas": ["Sucre es el nombre de la antigua moneda de Ecuador y también de la capital constitucional de Bolivia.",
+                    "La palabra sucre nombra la antigua moneda ecuatoriana y la capital constitucional de Bolivia.",
+                    "Sucre significa dos cosas: la moneda que tuvo Ecuador y la ciudad que es capital constitucional de Bolivia."]},
+    {"id": "sucre_persona", "fuente": "historia: Antonio Jose de Sucre, vencedor de Ayacucho",
+     "preguntas": ["¿Quién fue Sucre?", "¿Quién fue Antonio José de Sucre?"],
+     "respuestas": ["Antonio José de Sucre fue un militar venezolano, héroe de la independencia de Sudamérica y vencedor en la batalla de Ayacucho.",
+                    "Sucre fue un militar venezolano que luchó con Bolívar por la independencia y ganó la batalla de Ayacucho.",
+                    "Antonio José de Sucre fue un general de la independencia sudamericana, conocido por su victoria en Ayacucho."]},
+    {"id": "caldas_persona", "fuente": "historia de Colombia: Francisco Jose de Caldas, el Sabio Caldas",
+     "preguntas": ["¿Quién fue Caldas?", "¿Quién fue Francisco José de Caldas?"],
+     "respuestas": ["Francisco José de Caldas fue un científico y militar colombiano, conocido como «el Sabio Caldas», precursor de la independencia.",
+                    "Caldas fue un naturalista, astrónomo y patriota colombiano, llamado «el Sabio Caldas».",
+                    "Francisco José de Caldas fue un sabio colombiano que estudió la naturaleza y apoyó la independencia."]},
+    {"id": "caldas_depto", "fuente": "geografia de Colombia: Caldas, departamento andino; capital Manizales",
+     "preguntas": ["¿Qué es Caldas?", "¿Qué es el departamento de Caldas?"],
+     "respuestas": ["Caldas es un departamento de la región andina de Colombia, parte del Eje Cafetero, cuya capital es Manizales.",
+                    "El departamento de Caldas está en el centro occidente andino del país y su capital es Manizales.",
+                    "Manizales es la capital de Caldas, un departamento colombiano del Eje Cafetero."]},
+    {"id": "cordoba_persona", "fuente": "historia de Espana: Gonzalo Fernandez de Cordoba, el Gran Capitan",
+     "preguntas": ["¿Quién fue Gonzalo Fernández de Córdoba?"],
+     "respuestas": ["Gonzalo Fernández de Córdoba fue un militar español, conocido como «el Gran Capitán», figura de las guerras de Italia.",
+                    "Fue un militar español llamado «el Gran Capitán», famoso por sus campañas en Italia.",
+                    "El Gran Capitán fue Gonzalo Fernández de Córdoba, un general español de las guerras de Italia."]},
+    {"id": "cordoba_moneda", "fuente": "cordoba: moneda de Nicaragua; tambien ciudades de Espana y Argentina",
+     "preguntas": ["¿Qué es el córdoba?", "¿Qué significa córdoba?"],
+     "respuestas": ["El córdoba es la moneda de Nicaragua.",
+                    "Córdoba es el nombre de la moneda de Nicaragua y también de ciudades de España y Argentina.",
+                    "El córdoba es la unidad monetaria de Nicaragua."]},
+    {"id": "bolivar_persona", "fuente": "historia: Simon Bolivar, el Libertador",
+     "preguntas": ["¿Quién fue Simón Bolívar?"],
+     "respuestas": ["Simón Bolívar fue un militar y político venezolano, líder de la independencia de varios países de Sudamérica y conocido como el Libertador.",
+                    "Bolívar fue el Libertador: un venezolano que encabezó la independencia de Colombia, Venezuela, Ecuador, Perú y Bolivia.",
+                    "Simón Bolívar fue el general venezolano que lideró la independencia de gran parte de Sudamérica."]},
+    {"id": "bolivar_moneda", "fuente": "bolivar: moneda de Venezuela, nombrada por Simon Bolivar",
+     "preguntas": ["¿Qué es el bolívar?", "¿Qué significa bolívar?"],
+     "respuestas": ["El bolívar es la moneda de Venezuela, nombrada en honor a Simón Bolívar.",
+                    "Bolívar es el nombre de la moneda venezolana, en homenaje al Libertador.",
+                    "El bolívar es la unidad monetaria de Venezuela."]},
+    {"id": "narino_persona", "fuente": "historia de Colombia: Antonio Narino, precursor; publico la Declaracion de los Derechos del Hombre",
+     "preguntas": ["¿Quién fue Antonio Nariño?"],
+     "respuestas": ["Antonio Nariño fue un político y militar colombiano, precursor de la independencia, que tradujo y publicó los Derechos del Hombre.",
+                    "Nariño fue un precursor de la independencia de Colombia, conocido por publicar la Declaración de los Derechos del Hombre.",
+                    "Antonio Nariño fue un patriota neogranadino que impulsó la independencia y difundió los derechos del hombre."]},
+    {"id": "narino_palabra", "fuente": "geografia de Colombia: Narino, departamento; capital Pasto",
+     "preguntas": ["¿Qué significa nariño?"],
+     "respuestas": ["Nariño es un departamento del suroccidente de Colombia, cuya capital es Pasto, y el apellido del precursor Antonio Nariño.",
+                    "Nariño nombra un departamento colombiano del suroccidente, con capital en Pasto, y es el apellido de Antonio Nariño.",
+                    "Nariño es un departamento de Colombia con capital en Pasto; también es el apellido de un precursor de la independencia."]},
+    {"id": "santa_rosa_lima", "fuente": "historia religiosa: Santa Rosa de Lima, primera santa de America",
+     "preguntas": ["¿Quién fue Santa Rosa de Lima?", "¿Quién fue la santa Rosa de Lima?"],
+     "respuestas": ["Santa Rosa de Lima fue una religiosa peruana, la primera santa de América, y es patrona de Perú y de América.",
+                    "Fue una mujer peruana de vida religiosa, canonizada como la primera santa del continente americano.",
+                    "Santa Rosa de Lima es la santa peruana considerada la primera de América."]},
 ]
-C2_APERTURA = [
-    "{d}",
-    "Te explico: {dm}",
-    "En términos sencillos: {dm}",
-    "Respondo a tu pregunta general. {d}",
-    "Para aclararlo: {dm}",
-    "Esto es lo que significa. {d}",
-    "Una explicación breve: {dm}",
-    "Hablando de la palabra: {dm}",
-]
 
 
-def c2(palabra: str, el: Eleccion) -> tuple[str, str]:
-    i, ap = el.de("C2a", C2_APERTURA)
-    j, pu = el.de("C2p", C2_PUENTE)
-    k, d = el.de("C2d:" + palabra, C2_DEFINICION[palabra])
-    dm = d[0].lower() + d[1:] if d.split()[0] in ("La", "El", "Un", "Las", "Los") else d
-    return f"{ap.format(d=d, dm=dm)} {pu}", f"C2.a{i}p{j}d{k}"
+def c2(sentido: str, el: Eleccion) -> tuple[str, str]:
+    item = next(x for x in C2_SENTIDOS if x["id"] == sentido)
+    i, r = el.de("C2r:" + sentido, item["respuestas"])
+    return r, f"C2.{sentido}.{i}"
 
 
 # --------------------------------------------------------------------------- C3: plataforma / metodologia

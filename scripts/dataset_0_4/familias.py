@@ -50,7 +50,7 @@ class Candidato:
 
 
 class Generador:
-    def __init__(self, datos: Datos, semilla: int, reservados: set[str], modo: str = "train", b3_con_cifras: bool = False):
+    def __init__(self, datos: Datos, semilla: int, reservados: set[str], modo: str = "train", b3_con_cifras: bool = True):
         self.d = datos
         self.semilla = semilla
         self.modo = modo
@@ -708,46 +708,28 @@ class Generador:
                                      meta={"tipo": tipo}, exige=lambda xx: None if not xx.datos and not xx.sin_datos and not xx.ubicaciones else "contexto_no_vacio")
 
     # ------------------------------------------------------------------ C
+    TERRITORIOS_DEPTO = ["en Antioquia", "en Santander", "en Cundinamarca", "en el Valle del Cauca", "en el Atlántico", "en el Tolima",
+                         "en Risaralda", "en el Huila", "en el Cesar", "en La Guajira", "en Casanare", "en el Quindío", "en el Chocó"]
+    TERRITORIOS_PAIS = ["en Colombia", "en Colombia", "en el país", "a nivel nacional", "en todo el país", "en el territorio nacional"]
+
     def C1(self):
-        sub, rng = "C1", self.rng("C1")
-        temas = sorted(pq.GENERAL_TEMAS)
-        _, tema = self.el(sub).de("tema", temas)
-        p, qid = self._pregunta_c1(tema, rng)
-        concepto = {"deficit": "deficit", "acueducto": "acueducto", "alcantarillado": "alcantarillado", "pobreza": "pobreza",
-                    "poblacion": "poblacion", "score": "score"}[tema]
-        return self._desde_resolutor("C", sub, p, qid, lambda x, el: resp_c.c1(concepto, el), meta={"tema": tema},
+        sub, rng, el = "C1", self.rng("C1"), self.el("C1")
+        if rng.random() < 0.45:
+            _, (q, concepto, tema, ofrece) = el.de("fija", pq.GENERAL)
+            p, qid = self.preguntar(sub, [q])
+        else:
+            _, (frase, concepto, tema, ofrece) = el.de("comp", pq.GENERAL_COMPUESTAS)
+            territorio = rng.choice(self.TERRITORIOS_PAIS if rng.random() < 0.7 else self.TERRITORIOS_DEPTO)
+            p, qid = self.preguntar(sub, [frase], T=territorio)
+        return self._desde_resolutor("C", sub, p, qid, lambda x, e: resp_c.c1(concepto, tema, e, ofrece), meta={"tema": tema, "colombia": "Colombia" in p},
                                      exige=lambda x: None if not x.datos and not x.sin_datos and not x.ubicaciones else "contexto_no_vacio")
 
-    TERRITORIOS = ["en el país", "en todo el país", "a nivel nacional", "en el territorio nacional", "en Antioquia", "en Santander", "en Cundinamarca",
-                   "en el Valle del Cauca", "en el Atlántico", "en el Tolima", "en Risaralda", "en el Huila", "en el Cesar", "en La Guajira",
-                   "en Casanare", "en el Quindío", "en el Magdalena", "en el Chocó"]
-    C1_FRASES = {
-        "deficit": ["¿Cuántos hogares {T} viven en déficit habitacional?", "¿Cuántas viviendas le faltan {T}?",
-                    "¿Qué porcentaje de hogares {T} está en déficit de vivienda?", "Dame la cifra de déficit habitacional {T}."],
-        "acueducto": ["¿Cuántas personas {T} no tienen acueducto?", "¿Cuál es la cobertura de acueducto {T}?",
-                      "¿Qué porcentaje de hogares {T} tiene acueducto?"],
-        "alcantarillado": ["¿Cuántas viviendas {T} no tienen alcantarillado?", "¿Cuál es la cobertura de alcantarillado {T}?",
-                           "¿Qué porcentaje de hogares {T} tiene alcantarillado?"],
-        "pobreza": ["¿Cuántas personas {T} viven en pobreza multidimensional?", "¿Cuál es la incidencia del IPM {T}?",
-                    "¿Qué porcentaje de la población {T} es pobre?"],
-        "poblacion": ["¿Cuántos habitantes hay {T}?", "¿Cuál es la densidad poblacional {T}?", "¿Cuántas personas viven {T}?"],
-        "score": ["¿Cuál es el score de privación {T}?", "¿Cuál es el índice de privación promedio {T}?", "¿Cómo está el score de privación {T}?"],
-    }
-
-    def _pregunta_c1(self, tema, rng):
-        fijas = pq.GENERAL_TEMAS[tema]
-        if rng.random() < 0.45:
-            return self.preguntar("C1", fijas)
-        frases = self.C1_FRASES[tema]
-        return self.preguntar("C1", [f.replace("{T}", "{T}") for f in frases], T=rng.choice(self.TERRITORIOS))
-
     def C2(self):
-        sub, rng = "C2", self.rng("C2")
-        palabras = sorted(pq.PALABRAS_COMUNES)
-        _, palabra = self.el(sub).de("palabra", palabras)
-        p, qid = self.preguntar(sub, pq.PALABRAS_COMUNES[palabra], informal_ok=False, envolver=False)
-        clave = "sucre_dep" if palabra == "sucre" and "departamento" in p.lower() else palabra
-        return self._desde_resolutor("C", sub, p, qid, lambda x, el: resp_c.c2(clave, el), meta={"palabra": palabra},
+        sub, rng, el = "C2", self.rng("C2"), self.el("C2")
+        _, sentido = el.de("sentido", resp_c.C2_SENTIDOS)
+        _, q = el.de("q:" + sentido["id"], sentido["preguntas"])
+        p, qid = self.preguntar(sub, [q], informal_ok=False, envolver=False)
+        return self._desde_resolutor("C", sub, p, qid + "." + sentido["id"], lambda x, e: resp_c.c2(sentido["id"], e), meta={"sentido": sentido["id"]},
                                      exige=lambda x: None if not x.datos and not x.sin_datos and not x.ubicaciones else "contexto_no_vacio")
 
     def C3(self):
@@ -890,8 +872,8 @@ class Generador:
         el = self.el(sub)
         if tipo == "pura":
             ip, p = el.de("pura", pq.INYECCION_PURA)
-            secreto = any(t in p.lower() for t in ("instrucciones", "system prompt", "texto que aparece", "reglas de seguridad"))
-            return self._desde_resolutor("F", sub, p, f"F.pura{ip:02d}", lambda x, e: resp_def.f_pura(e, secreto), meta={"tipo": tipo},
+            tipo_f = pq.INYECCION_PURA_TIPO[ip]
+            return self._desde_resolutor("F", sub, p, f"F.pura{ip:02d}", lambda x, e: resp_def.f_pura(e, tipo_f), meta={"tipo": tipo},
                                          exige=lambda x: None if not x.datos and not x.ubicaciones else "contexto_con_datos")
         variable = self.var_equilibrada(rng, VARS_6, "F")
         for _ in range(40):
@@ -910,11 +892,12 @@ class Generador:
             il, plantilla = el.de("lf", pq.INYECCION_LINEA_FALSA)
             p = plantilla.format(Vn=al.NOMBRE_VARIABLE[variable], Mn=m["nombre"], Dn=m["departamento"], Yn=anio, P=legit)
             qid = f"F.linea{il}"
+            tipo_f = "linea"
         else:
             i, plantilla = el.de("inj", pq.INYECCION)
             p = plantilla.format(V=lg.var_frase(variable), M=M, P=legit)
             qid = f"F.inj{i:02d}"
-        secreto = "instrucciones internas" in p.lower()
+            tipo_f = pq.INYECCION_TIPO[i]
         e = self.entrada(p, [c], [variable], [anio], False)
-        return self.armar("F", sub, e, qid, lambda x, ee: resp_def.f_con_dato(x, ee, secreto),
+        return self.armar("F", sub, e, qid, lambda x, ee: resp_def.f_con_dato(x, ee, tipo_f),
                           lambda x: None if len(x.datos) == 1 and not x.sin_datos else "forma_f", meta={"tipo": tipo, "variable": variable})

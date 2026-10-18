@@ -313,10 +313,10 @@ LEAD_PERFIL = [
     "En {cita}, para {anio}: {lista}.",
 ]
 LEAD_PERFIL_ANIOS = [
-    "Perfil de {cita}:",
-    "Estos son los datos de {cita}:",
-    "En {cita}, año por año:",
-    "Resumen de {cita}:",
+    "Perfil de {cita}.",
+    "Estos son los datos de {cita}.",
+    "En {cita}, año por año.",
+    "Resumen de {cita}.",
 ]
 
 
@@ -397,41 +397,51 @@ def a6(ctx: lg.Contexto, el: Eleccion) -> tuple[str, str]:
 
 
 # --------------------------------------------------------------------------- A7: contexto con omision
-def _muestra_a7(datos: list[lg.Dato]) -> list[lg.Dato]:
-    """Hasta 3 datos de combinaciones (municipio, variable) distintas, en el orden del contexto."""
-    vistos, muestra = set(), []
-    for d in datos:
-        clave = (d.divipola, d.variable)
-        if clave not in vistos:
-            vistos.add(clave)
-            muestra.append(d)
-        if len(muestra) == 3:
-            break
-    return muestra
+A7_LEAD = [
+    "Esto es lo que trae la consulta. {cuerpo}",
+    "Con los datos disponibles, esto es lo que hay. {cuerpo}",
+    "Los datos que tengo son los siguientes. {cuerpo}",
+    "Respondo con todo lo que hay en la consulta. {cuerpo}",
+    "Estos son los valores disponibles. {cuerpo}",
+    "Te presento lo que está en la consulta, municipio por municipio. {cuerpo}",
+]
+A7_OMISION = [
+    "Se omitieron {n} datos por el límite de contexto; para ver el resto, acota la consulta a menos municipios, variables o años.",
+    "Además, se omitieron {n} datos por el límite de contexto; si los necesitas, pídelos por partes, con menos municipios, variables o años.",
+    "Se omitieron {n} datos por el límite de contexto. Para completar la respuesta, reduce los municipios, las variables o los años.",
+    "Por el límite de contexto se omitieron {n} datos; divide la consulta en partes más pequeñas para consultarlos.",
+    "Se omitieron {n} datos por el límite de contexto. Si quieres el resto, pregunta por un municipio o una variable a la vez.",
+    "Ten en cuenta que se omitieron {n} datos por el límite de contexto; acota la consulta para verlos.",
+]
 
 
 def a7(ctx: lg.Contexto, el: Eleccion) -> tuple[str, str]:
-    ds = _muestra_a7(ctx.datos)
-    mismo = len({d.divipola for d in ds}) == 1
-    if mismo:
-        trozos = [f"{lg.nombre_variable(d.variable)} {d.texto_valor} en {d.anio}{_etiqueta_proy(d)}" for d in ds]
-    else:
-        trozos = [f"{d.cita}, {lg.nombre_variable(d.variable)} {d.texto_valor} en {d.anio}{_etiqueta_proy(d)}" for d in ds]
-    i, f = el.de("A7", [
-        "Puedo mostrarte una parte: {lista}. Se omitieron {n} datos por el límite de contexto; para ver el resto, acota la consulta a menos municipios, variables o años.",
-        "Esta consulta trae más datos de los que caben a la vez. Con lo disponible: {lista}. Faltan {n} datos; pídelos por partes, con menos municipios, variables o años.",
-        "Por el límite de contexto solo puedo responder con una parte de lo que pides: {lista}. No incluí {n} datos; acota la consulta para ver el resto.",
-        "Con lo que cabe en la consulta: {lista}. Quedaron fuera {n} datos por el límite de contexto; si quieres, pregunta por un municipio o una variable a la vez.",
-        "Lo que alcanzo a mostrarte es esto: {lista}. Se omitieron {n} datos; para completar la respuesta, reduce los municipios, las variables o los años.",
-        "Solo cabe una parte de lo solicitado: {lista}. Dejé por fuera {n} datos por el límite de contexto; divide la consulta en partes más pequeñas.",
-    ])
-    lista = unir_pc(trozos)
-    if mismo:
-        lista = f"en {ds[0].cita}, {lista}"
-    texto = f.format(lista=lista, n=ctx.omitidos)
-    proy = [d for d in ds if not d.real]
-    pid = f"A7.{i}"
-    if proy:
-        texto += f" Los valores marcados como estimación tienen {fiab_frase(proy)}."
-        pid += "+e"
-    return texto, pid
+    """Cita TODAS las lineas [cN] del contexto (por municipio y variable, anios en orden) y avisa del numero exacto de omitidos."""
+    ds = ctx.datos
+    municipios: list[str] = []
+    for d in ds:
+        if d.divipola not in municipios:
+            municipios.append(d.divipola)
+    frases = []
+    for m in municipios:
+        propios = [d for d in ds if d.divipola == m]
+        variables: list[str] = []
+        for d in propios:
+            if d.variable not in variables:
+                variables.append(d.variable)
+        partes = []
+        for v in variables:
+            vs = sorted((d for d in propios if d.variable == v), key=lambda d: d.anio)
+            partes.append(f"{lg.nombre_variable(v)}: " + lg.unir([f"{d.texto_valor}{_etiqueta_proy(d)} en {d.anio}" for d in vs]))
+        frases.append(f"En {propios[0].cita}, " + "; ".join(partes) + ".")
+    cuerpo = " ".join(frases)
+    i, lead = el.de("A7l", A7_LEAD)
+    texto = lead.format(cuerpo=cuerpo)
+    pid = f"A7.l{i}"
+    cola, pc = _cola_estimaciones(ds, el, "A7c")
+    if cola:
+        texto += " " + cola
+        pid += pc
+    j, om = el.de("A7o", A7_OMISION)
+    texto += " " + om.format(n=ctx.omitidos)
+    return texto, pid + f"o{j}"

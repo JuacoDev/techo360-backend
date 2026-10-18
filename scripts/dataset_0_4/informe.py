@@ -60,7 +60,8 @@ def escribir_informe(salida: Path, args, datos, system, sha_system, base, nuevos
         A(f"| **{fam} · {NOMBRE_FAMILIA[fam]}** | **{sc}** | **{sl}** | **{sl - sc:+d}** |")
         tot_c, tot_l = tot_c + sc, tot_l + sl
     A(f"| **Total nuevos** | **{tot_c}** | **{tot_l}** | **{tot_l - tot_c:+d}** |")
-    A(f"\nC0 (804 del train base reenvueltos con el bloque vacío): **{len(c0_filas)}** de {len(base['train'])}.\n")
+    A(f"\nC0 (train base reenvuelto con el bloque vacío): **{len(c0_filas)}** de {len(base['train'])}; retirados: {len(c0_info['retirados'])} (lista y preguntas en `c0_retirados.json`).\n")
+    _diff_primera_corrida(A, salida, nuevos, hold_ctx, c0_filas)
     A("### Holdout contextual `holdout_ctx_v0_4`\n")
     A("| Familia | Cuota | Logrado |\n|---|---:|---:|")
     cuotas_h = {"A": 30, "B": 12, "C": 6, "D": 6, "E": 6}
@@ -269,55 +270,51 @@ def escribir_informe(salida: Path, args, datos, system, sha_system, base, nuevos
     (salida / "informe.md").write_text("\n".join(L) + "\n", encoding="utf-8", newline="\n")
 
 
+def _diff_primera_corrida(A, salida: Path, nuevos, hold_ctx, c0_filas) -> None:
+    previa = salida.parent / "trabajo-dataset-0.4.0"
+    ruta = previa / "train_nuevos.jsonl"
+    if not ruta.exists():
+        return
+    antes = collections.Counter(json.loads(l)["subfamilia"] for l in ruta.open(encoding="utf-8"))
+    ahora = collections.Counter(c.subfamilia for c in nuevos)
+    ap_antes = collections.Counter()
+    for l in ruta.open(encoding="utf-8"):
+        ap_antes[apertura(json.loads(l)["response"])] += 1
+    ap_ahora = collections.Counter(apertura(c.respuesta) for c in nuevos)
+    c0_antes = sum(1 for _ in (previa / "train_c0.jsonl").open(encoding="utf-8")) if (previa / "train_c0.jsonl").exists() else 0
+    A("### Diff de conteos contra la primera corrida (`trabajo-dataset-0.4.0/`, no modificada)\n")
+    A("| Subfamilia | Primera corrida | Esta corrida | Diferencia |\n|---|---:|---:|---:|")
+    for s_ in PLAN:
+        A(f"| {s_} | {antes[s_]} | {ahora[s_]} | {ahora[s_] - antes[s_]:+d} |")
+    A(f"| C0 | {c0_antes} | {len(c0_filas)} | {len(c0_filas) - c0_antes:+d} |")
+    A(f"| Total nuevos | {sum(antes.values())} | {sum(ahora.values())} | {sum(ahora.values()) - sum(antes.values()):+d} |")
+    A(f"\nApertura más frecuente: primera corrida «{ap_antes.most_common(1)[0][0]}» ({ap_antes.most_common(1)[0][1]}), esta «{ap_ahora.most_common(1)[0][0]}» ({ap_ahora.most_common(1)[0][1]}).\n")
+
+
 def _hallazgos(datos, nuevos, c0_filas, c0_info, motor_t, reservados, base):
     h = []
     n = 1
 
     def add(titulo, cuerpo):
         nonlocal n
-        h.append(f"**H{n}. {titulo}** {cuerpo}\n")
+        h.append(f"**N{n}. {titulo}** {cuerpo}\n")
         n += 1
-    add("«Colombia» es un municipio.", "En el catálogo existe Colombia (Huila). Con el resolutor actual, «¿Cuántos hogares tienen déficit habitacional en Colombia?» "
-        "resuelve el municipio Colombia (Huila) y el contexto trae sus datos, no una cifra nacional: la pregunta nacional más natural del usuario no produce bloque vacío. "
-        "(COMPROBADO ejecutando `resolver`.) Para no entrenar un contexto que producción no arma, las preguntas de C1 y de B2 evitan la palabra «Colombia» y usan «el país», «a nivel nacional». "
-        "Decisión: ¿se corrige el resolutor (tratar «Colombia» sin «municipio de» como país) o se agregan pares que enseñen a aclarar que la cifra es del municipio del Huila?")
-    add("Línea de ubicación y C3.", "Tras la parte A, mencionar un municipio sin variable ya no da bloque vacío (da «Ubicación: …»). C3 con municipio de ejemplo ya no es «bloque vacío»; "
-         "por eso C3 usa años o ninguna entidad como ejemplo. Los nuevos con bloque vacío son los de la tabla de §5; si el 23 % es un mínimo, hay que sustituir pares por C1/C2.")
-    add("«D.C..» en la línea de ubicación.", "El nombre de Bogotá termina en punto y la plantilla agrega otro: `Ubicación: Bogotá, D.C. pertenece al departamento de Bogotá, D.C..`. "
-        "Es el formato exacto pedido; las respuestas lo muestran con un solo punto. Si se quiere evitar el doble punto, es un cambio de una línea en `linea_ubicacion` (no lo toqué).")
-    add("Score con año implícito.", "Con año implícito el score usa 2024 y la línea dice «2024 (último año con dato real)» aunque el valor sea una proyección con fiabilidad. "
-        "Las etiquetas se contradicen. Evité estos casos en A5/A6 (no hay score con año implícito en el train). Decisión: corregir la etiqueta en `contexto.py` o dejarlo.")
-    add("B3 y las cifras.", "fase5-1 pide «sin cifras de municipios» en B, pero B3 es «algunas líneas con dato y una Sin dato». Implementé B3 sin citar el valor disponible (literal). "
-        "Recomiendo citarlo (validado por 4.5); `--b3-con-cifras` lo activa y los controles pasan a usar el validador en B3. Afecta 25 pares.")
-    add("Grupos de homónimos.", f"COMPROBADO: 66 grupos (50 de 2 municipios, 13 de 3, 3 de 4). Para el holdout E se reservaron 3 grupos completos; el train cubre 63. "
-        "Si se exigen los 66 en train, el holdout E tendría que usar municipios no reservados.")
-    n_sosp = sum(1 for c in nuevos if c.subfamilia == "B1" and c.meta.get("tipo") == "sospechoso")
-    add("Motivos de «Sin dato» que la base no da.", f"`el municipio no está en el universo de consulta` no puede salir del resolutor (el catálogo es el universo) y `no se pudo calcular el score` no se alcanza: quedan sin pares. "
-        f"`el valor estimado no es confiable` no ocurre de forma natural; se construyó con la entrada `huecos` en {n_sosp} pares de B1, por el mismo camino de `construir_contexto` (como autoriza el prompt). "
-        "Los demás motivos (sin historia, falta referencia, fuera de rango, sin dato real, componente del score) salen de huecos reales de la base.")
-    add("Municipios con nombre de palabra común no listados.", "El resolutor solo protege 10 nombres (NOMBRES_SENSIBLES). Otros municipios con nombre de palabra común se resuelven en minúscula (por ejemplo «pradera», «piedras» tras «de»). "
-        "Es una limitación de 4.1b, no del dataset; los evité en C2.")
-    en_c0 = c0_info.get("c0_pregunta_con_municipio_resuelto", 0)
-    add("C0 y producción.", f"{en_c0} de los {len(c0_filas)} pares de C0 tienen una pregunta en la que el resolutor real SÍ resuelve un municipio (en producción llevarían líneas de contexto, no bloque vacío); "
-        f"{c0_info.get('c0_pregunta_con_aclaracion', 0)} activarían una aclaración. Se reenvolvieron igual con el bloque vacío, como ordena el plan; conviene revisarlos en 5.3.")
-    add("Densidad real en 2026.", "COMPROBADO en la base: la densidad tiene fila «real» (TerriData) en 2026 pero «proyección» en 2024 y 2025. El año implícito de la densidad es 2026. No es un error del generador; lo dejo anotado por si 2.3 asumía otra cosa.")
-    add("El validador 4.5 marca «Techo 360» como cifra.", "COMPROBADO ejecutando `validar_cifras`: «Según Techo 360, la cobertura … fue de 82,7 %.» con un contexto sin «360» da `no_validada` (['360']). "
-        "Una respuesta del modelo que nombre a la plataforma así terminaría en regeneración o en respuesta determinista. Por eso ningún par nuevo escribe «Techo 360» (salvo el nombre de la fuente «Techo 360 - Score de privación» cuando está en la línea del contexto). "
-        "Decisión: ¿se exime la marca en el validador (una línea) o se deja el system/la política de estilo como está?")
-    add("Años posteriores a 2042 en la respuesta.", "`validar_cifras` solo trata como año el rango 2000–2042: «No tengo datos para 2075» con 2075 en la pregunta da `no_validada` (COMPROBADO). "
-        "En B4 (año > 2042) la respuesta dice «ese año» y no lo repite. Decisión: ¿ampliar el rango de años del validador a los años de la pregunta?")
-    add("Los 16 pares «reconvertir».", "Ninguna de sus cifras existe en `mapcalordb` (IPM nacional, déficit nacional, Camacol, cobertura urbana/rural), así que no pasan a A1/A2. La regla del 16/10 (conservar el estilo sin cifra) se cubre con C1 "
-        "(preguntas numéricas nacionales: no dar cifra, explicar el concepto), no con las 16 preguntas originales, que además dicen «en Colombia» (ver H1: producirían contexto del municipio Colombia, Huila). "
-        "Decisión: ¿se rehacen esas 16 como pares de C1 con su pregunta original, o basta con C1 tal como está?")
-    nA = [c for c in nuevos if c.familia == "A"]
-    contiene = collections.Counter(v for c in nA for v in {x[0] for x in c.meta["datos"]})
-    lineas = collections.Counter(x[0] for c in nA for x in c.meta["datos"])
-    una = collections.Counter(c.meta["datos"][0][0] for c in nA if len({x[0] for x in c.meta["datos"]}) == 1)
-    top_c = max(contiene.items(), key=lambda kv: kv[1])
-    add("«Ninguna variable > 25 % de A»: ¿sobre qué se mide?", f"Sobre las líneas de dato el máximo es {max(lineas.values()) / sum(lineas.values()) * 100:.1f} % y sobre los pares de una sola variable, "
-        f"{max(una.values()) / sum(una.values()) * 100:.1f} %; pero contando los pares de A que contienen la variable (series, perfiles y omisiones llevan varias), el máximo es {top_c[1] / len(nA) * 100:.1f} % "
-        f"({al.NOMBRE_VARIABLE[top_c[0]]}). Con esa tercera lectura no se cumple el 25 %; con las dos primeras sí. Decisión: ¿cuál es la medida del plan? Si es la tercera, hay que reducir los pares multivariable de A3, A5 y A7.")
+    ret = c0_info["retirados"]
+    por_municipio = sum(1 for r in ret if r["motivo"].startswith("la pregunta resuelve"))
+    por_colombia = sum(1 for r in ret if r["motivo"].startswith("contaba como municipio"))
+    add("D8 partía de un conteo anterior a H1.", f"Los 77 de H9 eran 8 preguntas que resuelven un municipio de verdad y 69 que solo lo resolvían porque «Colombia» contaba como el municipio del Huila (COMPROBADO: "
+        f"con el resolutor corregido, solo {por_municipio} resuelven municipio). Los 69 son hoy bloque vacío correcto en producción. "
+        f"Esta corrida retira {len(ret)} pares y deja C0 en {len(c0_filas)}. Con `--c0-retirar-colombia` se retiran los 77 y C0 queda en 727, como pedía el prompt. Decisión: ¿cuál de los dos?")
+    add("«¿Dónde queda X?» choca con la intención geográfica de la parte A.", "Para Granada y Venecia (nombres de varios municipios) esa pregunta ahora pide aclaración de homónimo y nunca llega al modelo (COMPROBADO con `resolver`). "
+        "Por eso C2 no incluye «¿Dónde queda Venecia/Granada?». Con ciudades fuera de Colombia que no son municipios sí funcionaría, pero no están en la lista de palabras.")
+    add("«Providencia» siempre resuelve un municipio.", "Aun en minúscula y tras «una», «providencia» resuelve el municipio Providencia (COMPROBADO), así que no hay pregunta de definición con bloque vacío. Providencia queda fuera de C2. "
+        "«Santa Rosa» solo entra como la santa («¿Quién fue Santa Rosa de Lima?»), que sí queda con bloque vacío.")
+    add("Respaldo de los hechos de C2.", "No consulté fuentes en línea (sin red): cada sentido de C2 lleva en el código un comentario con su fuente de verdad, que es conocimiento general del DLE y de historia escolar, REPORTADO por quien lo redactó. Hay que revisarlo en el 100 %.")
+    colombia_c1 = sum(1 for c in nuevos if c.subfamilia == "C1" and "Colombia" in c.entrada["pregunta"])
+    n_c1 = sum(1 for c in nuevos if c.subfamilia == "C1")
+    colombia_b2 = sum(1 for c in nuevos if c.subfamilia == "B2" and c.meta.get("tipo") == "agregado" and "Colombia" in c.entrada["pregunta"])
+    n_b2 = sum(1 for c in nuevos if c.subfamilia == "B2" and c.meta.get("tipo") == "agregado")
+    add("D6: preguntas nacionales con «en Colombia».", f"C1: {colombia_c1} de {n_c1} ({colombia_c1 / max(n_c1, 1) * 100:.0f} %); B2 agregado: {colombia_b2} de {n_b2} ({colombia_b2 / max(n_b2, 1) * 100:.0f} %). Meta: ≥ 40 %.")
     n3 = sum(1 for c in nuevos if len(__import__("re").split(r"(?<=[.!?])\s+(?=[A-ZÁÉÍÓÚ¿¡«])", c.respuesta)) > 3)
-    add("Respuestas con más de tres frases.", f"{n3} de {len(nuevos)} pares nuevos tienen más de 3 frases (series y perfiles de varios años, A7 y comparaciones de homónimos); ninguno supera 140 palabras. "
-        "fase5-1 permite series de hasta ~120 palabras; si se quiere un tope estricto de 3 frases, se acota en A5 y A7.")
+    add("Respuestas con más de tres frases.", f"{n3} de {len(nuevos)} pares nuevos tienen más de 3 frases (A5, A7 y E1, que ahora cita todas las líneas); la cota dura es 140 palabras (220 en A7).")
     return h
