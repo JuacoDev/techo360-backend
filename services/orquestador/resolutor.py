@@ -27,6 +27,12 @@ from services.orquestador.alias import (
 
 MAX_MUNICIPIOS = 5
 ANIO_MIN, ANIO_MAX = 2000, 2042
+# Intencion geografica ("¿en qué departamento está X?", "¿a qué departamento pertenece X?", "¿dónde queda X?"):
+# cuenta como intencion de datos para aclarar homonimos. Sobre texto normalizado (sin tildes ni puntuacion).
+_INTENCION_GEOGRAFICA = re.compile(
+    r"\b(?:(?:en|a|de) que departamento (?:esta|queda|se encuentra|se ubica|pertenece|es)"
+    r"|donde (?:queda|esta|se encuentra|se ubica))\b"
+)
 CODIGOS_FUERA_DEL_UNIVERSO = ("00000", "01001")
 
 
@@ -287,6 +293,7 @@ def resolver(texto: str, cat: Catalogo, hoy: date | None = None) -> Resolucion:
     res.variables = resolver_variables(tokens, ocupado)
     res.anios, res.rango = resolver_anios(texto, hoy)
     res.anio_implicito = not res.anios
+    intencion_geografica = bool(_INTENCION_GEOGRAFICA.search(normalizar(texto)))
 
     if len({s.clave for s in muns}) > MAX_MUNICIPIOS:
         res.aclaracion = {"tipo": "demasiados",
@@ -309,7 +316,7 @@ def resolver(texto: str, cat: Catalogo, hoy: date | None = None) -> Resolucion:
                 return res
             entradas = elegidas
         if len(entradas) > 1:
-            if not (res.variables or res.anios):
+            if not (res.variables or res.anios or intencion_geografica):
                 continue  # 4.1b: sin intencion de datos un homonimo no pide aclaracion; simplemente no se resuelve
             res.aclaracion = {"tipo": "homonimo",
                               "texto": f"Hay varios municipios llamados {nombre}: {_listar(entradas)}. ¿A cuál te refieres?"}

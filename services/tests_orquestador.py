@@ -502,6 +502,102 @@ class Determinismo(unittest.TestCase):
         self.assertEqual(res("acueducto en Rionegro").a_dict(), res("acueducto en Rionegro").a_dict())
 
 
+# ------------------------------------------------------------------------- linea de ubicacion
+class Ubicacion(unittest.TestCase):
+    def lineas(self, texto, datos=None, **kw):
+        _, lineas, _ = construir(texto, datos or Datos(), **kw).seleccionar()
+        return lineas
+
+    def test_municipio_sin_variable_da_una_linea(self):
+        self.assertEqual(self.lineas("háblame de Bucaramanga"),
+                         ["Ubicación: Bucaramanga pertenece al departamento de Santander."])
+
+    def test_la_linea_no_lleva_id_ni_numeros_ni_item(self):
+        items, lineas, omitidos = construir("háblame de Bucaramanga", Datos()).seleccionar()
+        self.assertEqual((items, omitidos), ([], 0))
+        self.assertFalse(re.search(r"\[c\d+\]|\d", lineas[0]))
+
+    def test_con_variable_no_hay_linea(self):
+        datos = Datos(series={("68001", A): [fila(2024, 94.2)]})
+        lineas = self.lineas("acueducto en Bucaramanga", datos)
+        self.assertEqual(len(lineas), 1)
+        self.assertFalse(any(l.startswith("Ubicación") for l in lineas))
+
+    def test_con_anio_pero_sin_variable_si_hay_linea(self):
+        self.assertEqual(self.lineas("Bucaramanga en 2022"), ["Ubicación: Bucaramanga pertenece al departamento de Santander."])
+
+    def test_alias_de_ciudades_usan_nombre_y_departamento_del_catalogo(self):
+        for pregunta, esperado in [
+            ("¿en qué departamento queda Cali?", "Ubicación: Santiago De Cali pertenece al departamento de Valle Del Cauca."),
+            ("háblame de Bogotá", "Ubicación: Bogotá, D.C. pertenece al departamento de Bogotá, D.C.."),
+            ("háblame de Cartagena", "Ubicación: Cartagena De Indias pertenece al departamento de Bolívar."),
+        ]:
+            with self.subTest(pregunta):
+                self.assertEqual(self.lineas(pregunta), [esperado])
+
+    def test_dos_municipios_dos_lineas_en_orden(self):
+        self.assertEqual(self.lineas("háblame de Pereira y Medellín"), [
+            "Ubicación: Pereira pertenece al departamento de Risaralda.",
+            "Ubicación: Medellín pertenece al departamento de Antioquia.",
+        ])
+
+    def test_homonimo_con_departamento_se_ubica_en_el_indicado(self):
+        self.assertEqual(self.lineas("háblame de Rionegro, Santander"),
+                         ["Ubicación: Rionegro pertenece al departamento de Santander."])
+
+    def test_pregunta_conceptual_sin_municipio_no_tiene_linea(self):
+        self.assertEqual(self.lineas("¿Qué es el déficit habitacional?"), [])
+        self.assertEqual(self.lineas("¿Qué es la pesca en Colombia?"), [])
+
+    def test_la_linea_es_obligatoria_y_cuenta_para_el_presupuesto(self):
+        c = construir("háblame de Bucaramanga", Datos())
+        _, lineas, _ = c.seleccionar(max_tokens=0)
+        self.assertEqual(len(lineas), 1)
+        c.candidatos.extend(candidatos(30, largo=200).candidatos)
+        items, lineas, omitidos = c.seleccionar(max_tokens=100)
+        self.assertEqual(lineas[0], "Ubicación: Bucaramanga pertenece al departamento de Santander.")
+        self.assertLessEqual(sum(cx.estimar_tokens(l) for l in lineas), 100)
+        self.assertEqual(len(items) + omitidos, 30)
+
+    def test_intencion_geografica_con_homonimo_aclara(self):
+        for pregunta in [
+            "¿En qué departamento está Rionegro?", "¿En qué departamento queda Rionegro?",
+            "¿En qué departamento se encuentra Rionegro?", "¿A qué departamento pertenece Rionegro?",
+            "¿Dónde queda Rionegro?", "dónde está Rionegro", "donde esta rionegro",
+        ]:
+            with self.subTest(pregunta):
+                r = res(pregunta)
+                self.assertEqual(r.aclaracion["tipo"], "homonimo")
+                self.assertEqual(r.municipios, [])
+
+    def test_homonimo_sin_intencion_sigue_sin_aclarar(self):
+        r = res("háblame de Rionegro")
+        self.assertIsNone(r.aclaracion)
+        self.assertEqual(r.municipios, [])
+
+    def test_nombres_sensibles_siguen_exigiendo_la_regla_4_1b(self):
+        self.assertEqual(res("¿dónde queda la pesca de trucha?").municipios, [])
+        self.assertEqual(codigos(res("¿En qué departamento está Pesca?")), ["15541"])  # capitalizado: municipio
+        self.assertEqual(res("¿en qué departamento esta la pesca?").municipios, [])
+
+    def test_validador_y_respuesta_determinista_con_la_linea(self):
+        from services.orquestador.pipeline import respuesta_determinista
+        from services.orquestador.validador_cifras import validar_cifras
+        lineas = self.lineas("¿en qué departamento está Bucaramanga?")
+        self.assertEqual(validar_cifras("Bucaramanga pertenece al departamento de Santander.", lineas, [])["estado"], "abstencion")
+        self.assertEqual(validar_cifras("Bucaramanga está en Santander; 99 % es inventado.", lineas, [])["estado"], "no_validada")
+        self.assertEqual(respuesta_determinista(lineas).split("\n")[1], "- " + lineas[0])
+
+    def test_ensamblado_completo_con_la_linea(self):
+        contexto = construir("háblame de Bucaramanga", Datos())
+        paquete = ens.ensamblar("háblame de Bucaramanga", contexto, dict(META))
+        user = paquete["peticion"]["mensajes"][1]["contenido"]
+        self.assertEqual(user, "CONTEXTO\nUbicación: Bucaramanga pertenece al departamento de Santander.\n\n"
+                               "PREGUNTA DEL USUARIO\nháblame de Bucaramanga")
+        self.assertEqual((paquete["peticion"]["contexto"], paquete["contexto_ids"]), ([], []))
+        validar_peticion(paquete["peticion"])
+
+
 # --------------------------------------------------------------------------- homonimos reales
 RUTA_ZONAS = os.environ.get("TECHO360_ZONAS_JSON")
 

@@ -8,6 +8,10 @@ Limites: maximo 20 elementos y ~900 tokens (3,0 caracteres por token, conservado
 recortar: lo pedido explicitamente; despues los años vecinos (hoy no se generan: el campo existe para
 cuando se agreguen); las lineas "Sin dato" de lo pedido NUNCA se descartan; si se omite algo, una linea
 final "Se omitieron N datos por el límite de contexto.".
+
+Linea de ubicacion: si el resolutor devolvio municipios sin ambiguedad y NINGUNA variable, se antepone por municipio
+"Ubicación: <Municipio> pertenece al departamento de <Departamento>." (sin [cN], sin id, sin numeros). Es
+obligatoria como las lineas "Sin dato": nunca se recorta y cuenta para el presupuesto.
 """
 import asyncio
 import json
@@ -161,6 +165,10 @@ def linea_dato(variable, municipio, item, implicito: bool) -> str:
             f"{formato_valor(variable, item['valor'])}. Fuente: {item['fuente']}. {cierre}")
 
 
+def linea_ubicacion(municipio) -> str:
+    return f"Ubicación: {municipio['nombre']} pertenece al departamento de {municipio['departamento']}."
+
+
 def linea_sin_dato(variable, municipio, anio, motivo: str) -> str:
     detalle = MOTIVOS.get(motivo, motivo)
     return (f"Sin dato para {NOMBRE_VARIABLE[variable]}, {municipio['nombre']} ({municipio['departamento']}), "
@@ -230,6 +238,11 @@ async def construir_contexto(
     orden = 0
     implicito = bool(resolucion.anio_implicito)
     pendientes: list[tuple[int, dict, str, int]] = []  # (orden, municipio, variable, año) a completar
+
+    if resolucion.municipios and not resolucion.variables:
+        for municipio in resolucion.municipios:
+            orden += 1
+            contexto.candidatos.append(Candidato(0, orden, None, linea_ubicacion(municipio), True))
 
     for municipio in resolucion.municipios:
         for variable in resolucion.variables:
