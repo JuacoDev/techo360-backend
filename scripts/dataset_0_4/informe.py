@@ -309,6 +309,14 @@ def _hallazgos(datos, nuevos, c0_filas, c0_info, motor_t, reservados, base):
     add("Los 16 pares «reconvertir».", "Ninguna de sus cifras existe en `mapcalordb` (IPM nacional, déficit nacional, Camacol, cobertura urbana/rural), así que no pasan a A1/A2. La regla del 16/10 (conservar el estilo sin cifra) se cubre con C1 "
         "(preguntas numéricas nacionales: no dar cifra, explicar el concepto), no con las 16 preguntas originales, que además dicen «en Colombia» (ver H1: producirían contexto del municipio Colombia, Huila). "
         "Decisión: ¿se rehacen esas 16 como pares de C1 con su pregunta original, o basta con C1 tal como está?")
+    nA = [c for c in nuevos if c.familia == "A"]
+    contiene = collections.Counter(v for c in nA for v in {x[0] for x in c.meta["datos"]})
+    lineas = collections.Counter(x[0] for c in nA for x in c.meta["datos"])
+    una = collections.Counter(c.meta["datos"][0][0] for c in nA if len({x[0] for x in c.meta["datos"]}) == 1)
+    top_c = max(contiene.items(), key=lambda kv: kv[1])
+    add("«Ninguna variable > 25 % de A»: ¿sobre qué se mide?", f"Sobre las líneas de dato el máximo es {max(lineas.values()) / sum(lineas.values()) * 100:.1f} % y sobre los pares de una sola variable, "
+        f"{max(una.values()) / sum(una.values()) * 100:.1f} %; pero contando los pares de A que contienen la variable (series, perfiles y omisiones llevan varias), el máximo es {top_c[1] / len(nA) * 100:.1f} % "
+        f"({al.NOMBRE_VARIABLE[top_c[0]]}). Con esa tercera lectura no se cumple el 25 %; con las dos primeras sí. Decisión: ¿cuál es la medida del plan? Si es la tercera, hay que reducir los pares multivariable de A3, A5 y A7.")
     n3 = sum(1 for c in nuevos if len(__import__("re").split(r"(?<=[.!?])\s+(?=[A-ZÁÉÍÓÚ¿¡«])", c.respuesta)) > 3)
     add("Respuestas con más de tres frases.", f"{n3} de {len(nuevos)} pares nuevos tienen más de 3 frases (series y perfiles de varios años, A7 y comparaciones de homónimos); ninguno supera 140 palabras. "
         "fase5-1 permite series de hasta ~120 palabras; si se quiere un tope estricto de 3 frases, se acota en A5 y A7.")
