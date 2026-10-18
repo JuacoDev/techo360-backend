@@ -161,7 +161,7 @@ C2_SENTIDOS = [
      "preguntas": ["¿Qué es Caldas?", "¿Qué es el departamento de Caldas?", "¿Qué significa Caldas?"],
      "respuestas": ["Caldas es un departamento de la región andina de Colombia, parte del Eje Cafetero, cuya capital es Manizales.",
                     "El departamento de Caldas está en el centro occidente andino del país y su capital es Manizales.",
-                    "Manizales es la capital de Caldas, un departamento colombiano del Eje Cafetero."]},
+                    "Caldas es un departamento colombiano del Eje Cafetero, cuya capital es Manizales."]},
     {"id": "cordoba_persona", "fuente": "historia de Espana: Gonzalo Fernandez de Cordoba, el Gran Capitan",
      "preguntas": ["¿Quién fue Gonzalo Fernández de Córdoba?", "¿Quién fue el Gran Capitán?", "¿Quién fue Gonzalo de Córdoba?"],
      "respuestas": ["Gonzalo Fernández de Córdoba fue un militar español, conocido como «el Gran Capitán», figura de las guerras de Italia.",

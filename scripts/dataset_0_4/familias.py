@@ -599,7 +599,9 @@ class Generador:
         elif tipo == "agregado":
             variable = rng.choice(VARS_6)
             V, v = self.frase_var(variable, sub)
-            p, qid = self.preguntar(sub, pq.AGREGADO, v=v, D=rng.choice(DEPARTAMENTOS_AGREGADO), Y=rng.choice([2020, 2022, 2024]))
+            con_colombia = rng.random() < 0.6  # D6: >= 40 % de las preguntas nacionales dicen «Colombia»
+            frases = [f for f in pq.AGREGADO if ("Colombia" in f) == con_colombia] or pq.AGREGADO
+            p, qid = self.preguntar(sub, frases, v=v, D=rng.choice(DEPARTAMENTOS_AGREGADO), Y=rng.choice([2020, 2022, 2024]))
             ex = {"tipo": "agregado", "variable": variable}
         else:
             p, qid = self.preguntar(sub, pq.VARIABLE_AJENA, informal_ok=True)
@@ -715,11 +717,13 @@ class Generador:
     def C1(self):
         sub, rng, el = "C1", self.rng("C1"), self.el("C1")
         if rng.random() < 0.45:
-            _, (q, concepto, tema, ofrece) = el.de("fija", pq.GENERAL)
+            con_colombia = rng.random() < 0.7  # D6: >= 40 % de las preguntas nacionales dicen «Colombia»
+            opciones = [x for x in pq.GENERAL if ("Colombia" in x[0]) == con_colombia] or pq.GENERAL
+            _, (q, concepto, tema, ofrece) = el.de("fija" + str(con_colombia), opciones)
             p, qid = self.preguntar(sub, [q])
         else:
             _, (frase, concepto, tema, ofrece) = el.de("comp", pq.GENERAL_COMPUESTAS)
-            territorio = rng.choice(self.TERRITORIOS_PAIS if rng.random() < 0.7 else self.TERRITORIOS_DEPTO)
+            territorio = rng.choice((["en Colombia"] * 5 + ["en el país", "a nivel nacional"]) if rng.random() < 0.8 else self.TERRITORIOS_DEPTO)
             p, qid = self.preguntar(sub, [frase], T=territorio)
         return self._desde_resolutor("C", sub, p, qid, lambda x, e: resp_c.c1(concepto, tema, e, ofrece), meta={"tema": tema, "colombia": "Colombia" in p},
                                      exige=lambda x: None if not x.datos and not x.sin_datos and not x.ubicaciones else "contexto_no_vacio")
