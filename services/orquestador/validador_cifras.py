@@ -101,6 +101,8 @@ def extraer_numeros(texto: str) -> list[Numero]:
                 trozo = linea[linea.rfind(" ", 0, m.start("num")) + 1:linea.find(" ", m.end("num")) if linea.find(" ", m.end("num")) != -1 else len(linea)]
                 if re.search(r"[A-Za-z_]", trozo):
                     continue
+            if linea[max(0, m.start("num") - 6):m.start("num")].lower() == "techo ":
+                continue  # la marca «Techo 360» no es una cifra
             valor, dec = _parsear(m.group("num"))
             if m.group("signo"):
                 valor = -valor
@@ -176,7 +178,9 @@ def _conteo_valido(n: Numero, items: list[dict], anios: set[int]) -> bool:
 def validar_cifras(texto: str, lineas_contexto: list[str], items: list[dict] | None = None, pregunta: str = "") -> dict:
     items = items or []
     numeros_ctx = extraer_numeros("\n".join(lineas_contexto))
-    anios_permitidos = {int(n.valor) for n in numeros_ctx if _es_anio(n)} | {int(n.valor) for n in extraer_numeros(pregunta) if _es_anio(n)}
+    # de la pregunta vale cualquier numero de 4 digitos entre 1900 y 2100 (tambien anios fuera del rango del contexto)
+    anios_pregunta = {int(n.valor) for n in extraer_numeros(pregunta) if n.entero_sin_formato and 1900 <= n.valor <= 2100}
+    anios_permitidos = {int(n.valor) for n in numeros_ctx if _es_anio(n)} | anios_pregunta
     # los valores del contexto, tal como estan escritos en sus lineas, mas los estructurados (items) si se dan
     referencias = [n.valor for n in numeros_ctx] + [float(i["valor"]) for i in items if i.get("valor") is not None]
     derivados = valores_derivados(items)
@@ -184,7 +188,7 @@ def validar_cifras(texto: str, lineas_contexto: list[str], items: list[dict] | N
 
     no_validadas, total = [], 0
     for n in extraer_numeros(texto):
-        if _es_anio(n) and int(n.valor) in anios_permitidos:
+        if n.entero_sin_formato and int(n.valor) in anios_permitidos and (_es_anio(n) or int(n.valor) in anios_pregunta):
             continue
         total += 1
         if any(_coincide(n, r) for r in referencias):
