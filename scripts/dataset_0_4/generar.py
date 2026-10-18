@@ -270,6 +270,19 @@ def escribir_jsonl(ruta: Path, filas: list[dict]) -> None:
             f.write(json.dumps(r, ensure_ascii=False, sort_keys=False) + "\n")
 
 
+def verificar_dorada_archivos(datos: Datos, rutas: list[Path]) -> tuple[int, list[str]]:
+    """Prueba dorada sobre los ARCHIVOS ya escritos: cada `entrada` se re-renderiza con el ensamblador real y debe dar el `instruction`."""
+    n, fallos = 0, []
+    for ruta in rutas:
+        with ruta.open(encoding="utf-8") as f:
+            for linea in f:
+                r = json.loads(linea)
+                n += 1
+                if datos.renderizar(r["entrada"])["user"] != r["instruction"]:
+                    fallos.append(r["id"])
+    return n, fallos
+
+
 def construir_c0(datos: Datos, tok: Tokenizador, system: str, sha_system: str, base: dict, semilla: int, hold_vec_fn, descartes: collections.Counter):
     from .tokens import prompt_hasta_asistente
     filas, informativos = [], collections.Counter()
@@ -383,6 +396,10 @@ def main(argv=None):
     tok.guardar()
 
     # --- verificaciones finales
+    n_dorada, fallos_dorada = verificar_dorada_archivos(datos, [salida / "train_nuevos.jsonl", salida / "train_c0.jsonl", salida / "holdout_ctx_v0_4.jsonl"])
+    if fallos_dorada:
+        print("PRUEBA DORADA FALLO EN:", fallos_dorada[:10], file=sys.stderr)
+        sys.exit(2)
     prob = []
     reservados_set = set(reservados)
     for r in filas_nuevos:
@@ -401,7 +418,7 @@ def main(argv=None):
     if not args.sin_informe:
         from .informe import escribir_informe
         escribir_informe(salida, args, datos, system, sha_system, base, nuevos, hold_ctx, c0_filas, c0_info, motor_t, motor_h,
-                         descartes_c0, reservados, sha_reservados, tok)
+                         descartes_c0, reservados, sha_reservados, tok, n_dorada)
     print(f"nuevos={len(filas_nuevos)} c0={len(c0_filas)} holdout_ctx={len(filas_hold)} -> {salida}")
 
 

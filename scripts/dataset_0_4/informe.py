@@ -33,7 +33,7 @@ def _base_id(rid: str) -> str:
 
 
 def escribir_informe(salida: Path, args, datos, system, sha_system, base, nuevos, hold_ctx, c0_filas, c0_info, motor_t, motor_h,
-                     descartes_c0, reservados, sha_reservados, tok):
+                     descartes_c0, reservados, sha_reservados, tok, n_dorada):
     L: list[str] = []
     A = L.append
     raiz_backend = Path(__file__).resolve().parents[2]
@@ -187,7 +187,7 @@ def escribir_informe(salida: Path, args, datos, system, sha_system, base, nuevos
     A("")
     A("## 6. Verificaciones finales\n")
     ternas = collections.Counter((m, v, a) for c in nuevos for (v, m, a, _) in c.meta["datos"])
-    A(f"- Prueba dorada (re-renderizar `entrada` con el ensamblador real da el mismo `user`): se ejecutó sobre cada par aceptado; 0 fallos entre los {len(nuevos) + len(hold_ctx)} pares escritos (un fallo habría descartado el par).")
+    A(f"- Prueba dorada (re-renderizar `entrada` con el ensamblador real da el mismo `user`): se ejecutó sobre cada candidato antes de aceptarlo y se repitió leyendo los archivos ya escritos (`train_nuevos`, `train_c0`, `holdout_ctx_v0_4`): {n_dorada} pares, 0 fallos.")
     A(f"- Máximo de pares por terna municipio-variable-año: {max(ternas.values()) if ternas else 0} (tope 3).")
     A(f"- Municipios reservados: {len(reservados)} (sha256 de la lista `{sha_reservados}`); ninguno aparece en un contexto de train; el holdout solo usa municipios reservados (comprobado antes de escribir).")
     hold_q = [p["instruction"] for p in base["holdout_v3_3"]] + [p["instruction"] for p in base["holdout_v0_4"]] + [c.entrada["pregunta"] for c in hold_ctx]
@@ -210,7 +210,7 @@ def escribir_informe(salida: Path, args, datos, system, sha_system, base, nuevos
         A(f"| {nombre} | {n} | `{sha256_archivo(ruta)}` |")
     A("\nComando exacto (desde `techo360-backend/`, con `techo360-chatbot` en `origin/feat/dataset-0.4.0-base` y `techo360-proyeccion` junto al backend):\n")
     A("```\npython -m scripts.dataset_0_4.generar --salida ../trabajo-dataset-0.4.0 --semilla %d\n```\n" % args.semilla)
-    A("Salida en UTF-8 con saltos de línea `\\n`. Una segunda corrida con la misma semilla produce los mismos sha256 (prueba de determinismo en `tests_generador.py`; ver §8).\n")
+    A("Salida en UTF-8 con saltos de línea `\\n`. Misma semilla, mismos archivos (prueba de determinismo en `tests_generador.py`).\n")
 
     # ---------------------------------------------------------------- ejemplos
     A("## 8. Ejemplos completos (system omitido), tres por familia\n")
