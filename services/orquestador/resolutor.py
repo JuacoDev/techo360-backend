@@ -287,6 +287,14 @@ def resolver(texto: str, cat: Catalogo, hoy: date | None = None) -> Resolucion:
             precedido = s.inicio > 0 and tokens[s.inicio - 1] in ("de", "del", "en")
             if not (capitalizado or precedido or s.departamento is not None):
                 s.tipo = "ignorado"
+    # «Colombia» es el país, salvo «municipio de Colombia», «Colombia, Huila» o «Colombia (Huila)»
+    for s in spans:
+        if s.tipo == "mun" and s.clave == "colombia" and s.departamento is None:
+            j = s.inicio - 1
+            while j >= 0 and tokens[j] in ("de", "del", "el"):
+                j -= 1
+            if not (j >= 0 and tokens[j] == "municipio"):
+                s.tipo = "pais"
     muns = [s for s in spans if s.tipo == "mun"]
     ocupado = {i for s in spans for i in range(s.inicio, s.fin)}
     res = Resolucion()

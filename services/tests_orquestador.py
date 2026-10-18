@@ -529,7 +529,7 @@ class Ubicacion(unittest.TestCase):
     def test_alias_de_ciudades_usan_nombre_y_departamento_del_catalogo(self):
         for pregunta, esperado in [
             ("¿en qué departamento queda Cali?", "Ubicación: Santiago De Cali pertenece al departamento de Valle Del Cauca."),
-            ("háblame de Bogotá", "Ubicación: Bogotá, D.C. pertenece al departamento de Bogotá, D.C.."),
+            ("háblame de Bogotá", "Ubicación: Bogotá, D.C. pertenece al departamento de Bogotá, D.C."),
             ("háblame de Cartagena", "Ubicación: Cartagena De Indias pertenece al departamento de Bolívar."),
         ]:
             with self.subTest(pregunta):
@@ -596,6 +596,65 @@ class Ubicacion(unittest.TestCase):
                                "PREGUNTA DEL USUARIO\nháblame de Bucaramanga")
         self.assertEqual((paquete["peticion"]["contexto"], paquete["contexto_ids"]), ([], []))
         validar_peticion(paquete["peticion"])
+
+
+# ------------------------------------------------------------------ correcciones 5.2b (H1, H3, H4, H11, H12)
+class Correcciones5_2b(unittest.TestCase):
+    CAT = Catalogo([
+        Municipio("41206", "Colombia", "41", "Huila"), Municipio("68001", "Bucaramanga", "68", "Santander"),
+        Municipio("11001", "Bogotá, D.C.", "11", "Bogotá, D.C. (derivado de municipios -- sin poligono propio)"),
+    ])
+
+    def r(self, texto):
+        return rs.resolver(texto, self.CAT, HOY)
+
+    def test_h1_colombia_es_el_pais(self):
+        r = self.r("¿Cuál es el déficit habitacional en Colombia?")
+        self.assertEqual((r.municipios, r.aclaracion), ([], None))
+        self.assertTrue(r.variables)
+        c = correr(cx.construir_contexto(r, None, hoy_anio=2026, leer_serie_fn=Datos().leer, completar=Datos().completar))
+        self.assertEqual(c.seleccionar(), ([], [], 0))  # bloque vacio
+
+    def test_h1_colombia_municipio_si_se_pide_asi(self):
+        for texto in ("acueducto en el municipio de Colombia, Huila en 2022", "acueducto en Colombia (Huila) 2022",
+                      "acueducto en Colombia, Huila 2022", "acueducto del municipio de Colombia en 2022"):
+            with self.subTest(texto):
+                self.assertEqual([m["divipola"] for m in self.r(texto).municipios], ["41206"])
+
+    def test_h1_colombia_junto_a_otro_municipio_no_lo_afecta(self):
+        r = self.r("compara Bucaramanga y Colombia en acueducto")
+        self.assertEqual([m["divipola"] for m in r.municipios], ["68001"])
+
+    def test_h3_ubicacion_sin_doble_punto(self):
+        self.assertEqual(cx.linea_ubicacion({"nombre": "Bogotá, D.C.", "departamento": "Bogotá, D.C."}),
+                         "Ubicación: Bogotá, D.C. pertenece al departamento de Bogotá, D.C.")
+        self.assertEqual(cx.linea_ubicacion({"nombre": "Pasto", "departamento": "Nariño"}), "Ubicación: Pasto pertenece al departamento de Nariño.")
+
+    def test_h4_etiqueta_solo_para_valor_real(self):
+        mun = {"nombre": "Bucaramanga", "departamento": "Santander"}
+        base = {"anio": 2024, "valor": 0.14, "fuente": "Proyección Techo 360"}
+        real = cx.linea_dato("score_privacion", mun, {**base, "es_real": True, "fiabilidad": None}, True)
+        proy = cx.linea_dato("score_privacion", mun, {**base, "es_real": False, "fiabilidad": 70}, True)
+        self.assertIn("2024 (último año con dato real)", real)
+        self.assertIn("2024 (año de referencia)", proy)
+        self.assertNotIn("último año con dato real", proy)
+        self.assertIn("Bucaramanga (Santander), 2024:", cx.linea_dato("score_privacion", mun, {**base, "es_real": False, "fiabilidad": 70}, False))
+
+    def test_h11_la_marca_techo_360_no_es_cifra(self):
+        from services.orquestador.validador_cifras import validar_cifras
+        lineas = ["[c1] Cobertura de acueducto, Bucaramanga (Santander), 2024: 82,7 %. Fuente: DNP - TerriData. Dato real."]
+        items = [{"id": "c1", "variable": "cobertura_acueducto", "codigodivipola": "68001", "anio": 2024, "valor": 82.7}]
+        self.assertEqual(validar_cifras("Techo 360 reporta 82,7 % en 2024.", lineas, items, "")["estado"], "ok")
+        self.assertEqual(validar_cifras("Reporta 82,7 % y también 360 en 2024.", lineas, items, "")["estado"], "no_validada")
+        self.assertEqual(validar_cifras("Techo 360 reporta 82,7 % y 360 hogares.", lineas, items, "")["no_validadas"], ["360"])
+
+    def test_h12_anios_de_la_pregunta_aunque_pasen_de_2042(self):
+        from services.orquestador.validador_cifras import validar_cifras
+        self.assertEqual(validar_cifras("No tengo datos para 2075.", [], [], "¿Cuál será en 2075?")["estado"], "abstencion")
+        self.assertEqual(validar_cifras("No tengo datos de 1950.", [], [], "¿Y en 1950?")["estado"], "abstencion")
+        self.assertEqual(validar_cifras("No tengo datos para 2075.", [], [], "¿Cuál será?")["estado"], "no_validada")  # no esta en la pregunta
+        self.assertEqual(validar_cifras("Dato de 2200.", [], [], "¿En 2200?")["estado"], "no_validada")  # fuera de 1900-2100
+        self.assertEqual(validar_cifras("Hay 2075 hogares.", [], [], "¿Cuál será en 2075 y 2075?")["estado"], "abstencion")
 
 
 # --------------------------------------------------------------------------- homonimos reales
