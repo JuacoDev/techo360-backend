@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, patch
 
 from schemas.chatbot_contrato_v2 import validar_peticion
 from services import chatbot_estados, chatbot_service, proyeccion_cache
+from services.orquestador import aclaracion as acl
 from services.orquestador import grafica_bloque as gb
 from services.orquestador import persistencia
 from services.orquestador import pipeline as pp
@@ -265,8 +266,29 @@ class Reloj:
         return self.ultimo
 
 
+class FakeRedis:
+    """Doble minimo de redis.Redis (set con ex, get, delete) con reloj propio para probar el TTL."""
+
+    def __init__(self):
+        self.ahora, self.datos = 0.0, {}
+
+    def set(self, clave, valor, ex=None):
+        self.datos[clave] = (valor, self.ahora + ex if ex else None)
+
+    def get(self, clave):
+        valor, vence = self.datos.get(clave, (None, None))
+        if vence is not None and self.ahora >= vence:
+            del self.datos[clave]
+            return None
+        return valor
+
+    def delete(self, clave):
+        self.datos.pop(clave, None)
+
+
 def correr_pipeline(pregunta, solicitar, datos=None, **kw):
     datos = datos or Datos(series={("68001", A): SERIE})
+    kw.setdefault("almacen", acl.AlmacenAclaraciones(fabrica_cliente=FakeRedis))  # nunca el Redis real
     return correr(pp.responder(pregunta, None, dict(META), hoy=HOY, catalogo=CAT, solicitar=solicitar,
                                leer_serie_fn=datos.leer, completar=datos.completar,
                                score_fn=AsyncMock(return_value={"estado": "sin_dato", "motivo": "sin_hueco"}), **kw))

@@ -21,6 +21,7 @@ from datetime import date
 from schemas.chatbot_contrato_v2 import ErrorContrato, validar_respuesta
 from services import chatbot_rpc_client
 from services import proyeccion_service as pservicio
+from services.orquestador import aclaracion as acl
 from services.orquestador.contexto import LINEA_SIN_CONTEXTO, leer_serie
 from services.orquestador.grafica_bloque import procesar_grafica
 from services.orquestador.orquestador import preparar_consulta
@@ -75,13 +76,66 @@ async def _generar(peticion: dict, solicitar, timeout: float):
     return respuesta, None
 
 
-async def responder(
+async def responder(pregunta: str, db_datos, metadatos: dict, *, catalogo=None, almacen=None, hoy: date | None = None, **kw) -> dict:
+    """Entrada del pipeline v2. Antes del orquestador aplica la memoria de aclaraciones (4.13): si la conversacion
+    esta esperando la respuesta a «¿A cuál te refieres?», una respuesta corta e inequivoca fija el municipio y la
+    pregunta original sigue su flujo; si no, se descarta el estado y la pregunta se procesa normal. El estado vive
+    en Redis por usuario y conversacion (aclaracion.py); si Redis falla todo sigue como antes de la 4.13."""
+    usuario_id, conversacion_id = metadatos.get("usuario_id"), metadatos.get("conversacion_id")
+    almacen = almacen or acl.almacen_por_defecto()
+    catalogo = catalogo or cargar_catalogo(db_datos)
+    estado = await asyncio.to_thread(almacen.leer, usuario_id, conversacion_id)
+    fijados: dict = {}
+    consumido = None
+    if estado is not None:
+        eleccion = acl.interpretar_respuesta(pregunta, estado, catalogo)
+        if eleccion.resultado == "elegida":
+            consumido = estado
+            await asyncio.to_thread(almacen.borrar, usuario_id, conversacion_id)
+            fijados = {**estado["fijados"], acl.clave_fijado(eleccion.opcion): eleccion.opcion["divipola"]}
+            pregunta = estado["pregunta_original"]
+        elif eleccion.resultado in ("ambigua", "repetir"):
+            opciones = eleccion.opciones if eleccion.resultado == "ambigua" else estado["opciones"]
+            if eleccion.resultado == "ambigua":  # acota la aclaracion a esas opciones y renueva el plazo
+                nuevo = {**estado, "tipo": "homonimo", "opciones": opciones, "creado_en": int(time.time())}
+                await asyncio.to_thread(almacen.guardar, usuario_id, conversacion_id, nuevo)
+            return _aclaracion(acl.texto_homonimo(opciones), "homonimo")
+        else:  # pregunta nueva: el estado se descarta
+            await asyncio.to_thread(almacen.borrar, usuario_id, conversacion_id)
+    try:
+        resultado = await _responder(pregunta, db_datos, metadatos, hoy=hoy, catalogo=catalogo, fijados=fijados, **kw)
+    except BaseException:
+        if consumido is not None:  # el RPC fallo o se cancelo: el reintento debe poder resolver la misma respuesta
+            await asyncio.shield(asyncio.to_thread(almacen.guardar, usuario_id, conversacion_id, consumido))
+        raise
+    opciones = resultado.pop("opciones", None)
+    if resultado["accion"] == "aclarar" and opciones:
+        nuevo = acl.construir_estado(pregunta, {"tipo": resultado["tipo"], "opciones": opciones}, fijados)
+        if nuevo is not None:
+            await asyncio.to_thread(almacen.guardar, usuario_id, conversacion_id, nuevo)
+    elif resultado["accion"] == "error" and consumido is not None:
+        await asyncio.to_thread(almacen.guardar, usuario_id, conversacion_id, consumido)
+    return resultado
+
+
+def _aclaracion(texto: str, tipo: str, opciones: list | None = None) -> dict:
+    r = {
+        "accion": "aclarar", "tipo": tipo, "texto": texto,
+        "meta": {"version_contrato": 2, "regeneraciones": 0, "validacion_cifras": {"estado": "abstencion", "no_validadas": []}},
+    }
+    if opciones:
+        r["opciones"] = opciones
+    return r
+
+
+async def _responder(
     pregunta: str,
     db_datos,
     metadatos: dict,
     *,
     hoy: date | None = None,
     catalogo=None,
+    fijados: dict | None = None,
     solicitar=None,
     reloj=time.monotonic,
     rpc_timeout: float = RPC_TIMEOUT_S,
@@ -100,13 +154,10 @@ async def responder(
     catalogo = catalogo or cargar_catalogo(db_datos)
     preparada = await preparar_consulta(
         pregunta, db_datos, metadatos, hoy=hoy, catalogo=catalogo,
-        leer_serie_fn=leer_serie_fn, completar=completar, score_fn=score_fn, **inyecciones,
+        leer_serie_fn=leer_serie_fn, completar=completar, score_fn=score_fn, fijados=fijados, **inyecciones,
     )
     if preparada["accion"] == "aclarar":
-        return {
-            "accion": "aclarar", "tipo": preparada["tipo"], "texto": preparada["texto"],
-            "meta": {"version_contrato": 2, "regeneraciones": 0, "validacion_cifras": {"estado": "abstencion", "no_validadas": []}},
-        }
+        return _aclaracion(preparada["texto"], preparada["tipo"], preparada.get("opciones"))
     peticion = preparada["peticion"]
     contexto_compacto, contexto_ids = preparada["contexto_compacto"], preparada["contexto_ids"]
     items = peticion["contexto"]
