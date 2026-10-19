@@ -159,14 +159,19 @@ def _item(variable, municipio, anio, valor, origen, es_real, fiabilidad):
 
 
 def linea_dato(variable, municipio, item, implicito: bool) -> str:
-    anio = f"{item['anio']} (último año con dato real)" if implicito else str(item["anio"])
+    # «último año con dato real» solo para un valor real; un valor proyectado con año implícito (Score) es un año de referencia
+    if implicito:
+        anio = f"{item['anio']} (último año con dato real)" if item["es_real"] else f"{item['anio']} (año de referencia)"
+    else:
+        anio = str(item["anio"])
     cierre = "Dato real." if item["es_real"] else f"Proyección, fiabilidad {item['fiabilidad']} %."
     return (f"{NOMBRE_VARIABLE[variable]}, {municipio['nombre']} ({municipio['departamento']}), {anio}: "
             f"{formato_valor(variable, item['valor'])}. Fuente: {item['fuente']}. {cierre}")
 
 
 def linea_ubicacion(municipio) -> str:
-    return f"Ubicación: {municipio['nombre']} pertenece al departamento de {municipio['departamento']}."
+    texto = f"Ubicación: {municipio['nombre']} pertenece al departamento de {municipio['departamento']}"
+    return texto if texto.endswith(".") else texto + "."  # «Bogotá, D.C.» ya termina en punto
 
 
 def linea_sin_dato(variable, municipio, anio, motivo: str) -> str:
