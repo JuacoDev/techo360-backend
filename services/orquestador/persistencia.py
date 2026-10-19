@@ -16,6 +16,28 @@ CAMPOS_META = (
 _JSONB = {"contexto", "validacion_cifras", "grafica"}
 
 
+def payload_grafica(meta: dict | None) -> dict | None:
+    """Lo unico de `meta["grafica"]` que se entrega al cliente (7.1): el payload de una grafica valida, con datos."""
+    g = (meta or {}).get("grafica")
+    return g["payload"] if isinstance(g, dict) and g.get("valida") and g.get("payload") else None
+
+
+def adjuntar_grafica(mensaje, meta: dict | None) -> None:
+    """Deja el payload en el objeto del mensaje del asistente para que MensajeResponse lo serialice (campo no mapeado)."""
+    mensaje.grafica = payload_grafica(meta)
+
+
+def adjuntar_graficas_guardadas(db, mensajes: list) -> None:
+    """Listado de una conversacion: lee mensajes.grafica (migracion 0004) de los mensajes del asistente con grafica."""
+    ids = [m.id for m in mensajes if m.rol == "asistente"]
+    if not ids:
+        return
+    filas = db.execute(text("SELECT id, grafica FROM mensajes WHERE id = ANY(:ids) AND grafica IS NOT NULL"), {"ids": ids}).all()
+    guardadas = {fila[0]: payload_grafica({"grafica": fila[1]}) for fila in filas}
+    for m in mensajes:
+        m.grafica = guardadas.get(m.id)
+
+
 def _parametros(meta: dict) -> dict:
     p = {c: meta.get(c) for c in CAMPOS_META}
     p["regeneraciones"] = int(p["regeneraciones"] or 0)

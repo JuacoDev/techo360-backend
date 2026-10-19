@@ -25,6 +25,7 @@ from services.orquestador.contexto import (
     compactar_contexto,
     estimar_tokens,
 )
+from services.orquestador.grafica_intencion import PREFIJO_OPCIONES
 from services.orquestador.prompts import VERSION_PROMPT_ACTUAL, cargar_system
 
 MAX_PREGUNTA = 1500
@@ -48,14 +49,14 @@ def estimar_tokens_prompt(texto: str) -> int:
 
 def sanear_pregunta(texto: str) -> tuple[str, bool]:
     """-> (pregunta saneada, fue_cortada). Quita caracteres de control, colapsa espacios, neutraliza las
-    lineas que imitan los delimitadores del mensaje y corta a MAX_PREGUNTA caracteres."""
+    lineas que imitan los delimitadores del mensaje (o la linea de opciones de grafica, 7.1) y corta a MAX_PREGUNTA caracteres."""
     limpio = "".join(ch for ch in (texto or "") if ch in "\n\t" or not unicodedata.category(ch).startswith("C"))
     lineas = [re.sub(r"[ \t]+", " ", linea).strip() for linea in limpio.split("\n")]
     salida: list[str] = []
     for linea in lineas:
         if not linea and (not salida or not salida[-1]):
             continue  # sin lineas en blanco al inicio ni repetidas
-        if linea.rstrip(":").strip().upper() in _DELIMITADORES or _ETIQUETA_ID.match(linea):
+        if linea.rstrip(":").strip().upper() in _DELIMITADORES or _ETIQUETA_ID.match(linea) or linea.startswith(PREFIJO_OPCIONES):
             linea = "» " + linea
         salida.append(linea)
     pregunta = "\n".join(salida).strip()

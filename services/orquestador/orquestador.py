@@ -12,6 +12,7 @@ from core.config import settings
 from services.orquestador import rag
 from services.orquestador.contexto import construir_contexto
 from services.orquestador.ensamblador import MENSAJE_PREGUNTA_LARGA, ensamblar
+from services.orquestador.grafica_intencion import intencion_grafica
 from services.orquestador.intencion import intencion_conceptual
 from services.orquestador.resolutor import cargar_catalogo, resolver
 
@@ -22,7 +23,10 @@ async def preparar_consulta(pregunta: str, db, metadatos: dict, *, hoy: date | N
     resolucion = resolver(pregunta, catalogo, hoy, fijados)
     if resolucion.aclaracion is not None:
         return {"accion": "aclarar", **resolucion.aclaracion}
-    contexto = await construir_contexto(resolucion, db, hoy_anio=hoy.year, **inyecciones)
+    # 7.1: con intencion de grafica (y un municipio resuelto) el contexto trae la linea de opciones y, si es de evolucion
+    # sin años, la serie completa.
+    intencion = intencion_grafica(pregunta, resolucion)
+    contexto = await construir_contexto(resolucion, db, hoy_anio=hoy.year, intencion_grafica=intencion, **inyecciones)
     # 6.6: RAG curado SOLO con CHATBOT_RAG_ACTIVO y pregunta conceptual (los datos numericos nunca van por RAG).
     # `rag_fn` reemplaza la busqueda (pruebas); no activa el RAG por si solo.
     if settings.chatbot_rag_activo and intencion_conceptual(pregunta, resolucion):
@@ -30,4 +34,5 @@ async def preparar_consulta(pregunta: str, db, metadatos: dict, *, hoy: date | N
     resultado = ensamblar(pregunta, contexto, metadatos)
     if resultado["notas"]["pregunta_no_cabe"]:  # 6.7b: ni sin contexto cabe en num_ctx; mensaje fijo, sin llamar al modelo
         return {"accion": "aclarar", "tipo": "pregunta_larga", "texto": MENSAJE_PREGUNTA_LARGA}
+    resultado["notas"]["intencion_grafica"] = intencion.activa
     return {"accion": "consultar", "resolucion": resolucion.a_dict(), **resultado}
