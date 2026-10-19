@@ -31,7 +31,7 @@ from services.orquestador.contexto import (
     estimar_tokens,
 )
 from services.orquestador.grafica_intencion import PREFIJO_OPCIONES
-from services.orquestador.prompts import VERSION_PROMPT_ACTUAL, cargar_system
+from services.orquestador import prompts
 
 MAX_PREGUNTA = 1500
 MAX_INTERCAMBIOS_HISTORIAL = 2
@@ -119,7 +119,8 @@ def ensamblar(
     `metadatos`: usuario_id y consentimiento_entrenamiento (obligatorios) mas conversacion_id, mensaje_id e
     intento si se conocen. Se anade version_prompt. `historial`: intercambios previos de la misma conversacion y usuario
     (ver el docstring del modulo); None o [] = el mensaje de siempre, byte a byte."""
-    system = cargar_system() if system is None else system
+    version_prompt = prompts.VERSION_PROMPT_ACTUAL
+    system = prompts.cargar_system(version_prompt) if system is None else system
     saneada, cortada = sanear_pregunta(pregunta)
     base = TOKENS_PLANTILLA + estimar_tokens_prompt(system)
     previos = preparar_historial(historial)
@@ -153,7 +154,7 @@ def ensamblar(
             {"rol": "system", "contenido": system}, *mensajes_historial(previos), {"rol": "user", "contenido": contenido},
         ],
         "contexto": items,
-        "metadatos": {**metadatos, "version_prompt": VERSION_PROMPT_ACTUAL},
+        "metadatos": {**metadatos, "version_prompt": version_prompt},
     }
     return {
         "peticion": peticion,

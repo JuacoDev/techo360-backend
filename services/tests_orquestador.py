@@ -9,6 +9,7 @@ Uso:
     python -m unittest services.tests_orquestador
 """
 import asyncio
+import hashlib
 import json
 import os
 import re
@@ -17,6 +18,7 @@ from datetime import date
 from pathlib import Path
 from unittest.mock import patch
 
+from core.config import Settings
 from schemas.chatbot_contrato_v2 import PeticionV2, validar_peticion
 from services.orquestador import contexto as cx
 from services.orquestador import ensamblador as ens
@@ -402,12 +404,74 @@ class Ensamblado(unittest.TestCase):
             with self.assertRaises(pr.PromptCorruptoError):
                 pr.cargar_system(directorio=d)
 
+    def test_7_las_dos_versiones_se_seleccionan_por_configuracion(self):
+        for version in ("sp-0.4.0-1", "sp-0.4.1-1"):
+            with self.subTest(version=version), patch.object(pr, "VERSION_PROMPT_ACTUAL", version):
+                resultado = ens.ensamblar("hola", cx.ContextoConstruido(), dict(META))
+                self.assertEqual(resultado["peticion"]["mensajes"][0]["contenido"], pr.cargar_system(version))
+                self.assertEqual(resultado["peticion"]["metadatos"]["version_prompt"], version)
+
+    def test_7_version_invalida_falla_con_mensaje_claro(self):
+        with self.assertRaises(ValueError) as error:
+            Settings(chatbot_system_version="sp-0.9.9-1")
+        self.assertIn("CHATBOT_SYSTEM_VERSION", str(error.exception))
+
+    def test_7_golden_30_ensamblajes_0_4_0(self):
+        from services.tests_orquestador_rag import F_FORMULA, F_MUN
+
+        esperados = [
+            "3d0c1d9a7d9a0ddddab7661d7d3b0e06203052b8639017aec1f813a6d6229254",
+            "587fcba16d16b1a0d5fb766a5921f15decd5db94382202c1aa429169d2e24f35",
+            "3740d542ea91e76dda94d6d3d31cf58c4afaa1bbb11f89e8576a7992e6eeef9b",
+            "6135fd01244ca6f2c3c613716234b9f690e525945a699d90e900807ea359bb50",
+            "e7c4a82d8fb1de8b354b798ecc71827561b16eeccca702dfb6f43c3ee5a30009",
+            "8efd878b5531955420251b95e9721d858d88a620d8b912b77f9ae3de85469831",
+            "7dd5890b6aa0674630f580016e840e1c9692064c9e4630dab005716f3477126a",
+            "f7db66724602ef4334061ca4bf2414eeb05392d0d8a946040708ffb1c5c24d4a",
+            "3ed05265c774adc42eac9c65f1851bc3929f1acfb2e66ddc348638070ad37db6",
+            "0435626561a74886a5d6e00da658dbc33ae0ff8c75daed44b4270919c8008a19",
+            "283531ec31c08248e0508b89fdec3c7a5b42d69c660d5e82e19f5d059578dbb6",
+            "8c8c841655cf4f7931e50f6b4b5df557aeef8d40323f3e32144d5f086c54f53b",
+            "54a2c95935f156932887b94cb8e68f63d9571be585984cf416d90808fbf437df",
+            "80950f965443d123a31cc4328fdfe301991e32b3dd01e007fb3df1a2293b2a69",
+            "ff2266db3af75c28c82c6933365d022bf8907549ba593caa48be1c7cd1eea8f1",
+            "afc226582743ae3a2492e1cb5256588529602489deb8e5d113a67991b360a31d",
+            "470b37d657885ee5720ed3099c169477dbff72f9e8a84b4cc75e9055ec766ed5",
+            "ce358aae016e261352213f3c8ae00f6cf3271ba12f339d4788e33115fb073eb8",
+            "5bfc4bd16a12c52693c85a66e314a5942a5d1b113e4092f99761098d7183d67a",
+            "6f239628610f1a9a0ab9cac8dcaafc11690f4a55c408a2c69bba722ccdc2a1ee",
+            "79a9912c18e63ee3918cc7dbe9c47250db9707a1272f3b7aa11e10e045facf4a",
+            "cbe5f7c825b7cde93d51e936851227e892993cfcf0e5eb7d4001a412f3f818e8",
+            "bac3c7337424ce3ceec8337d89941a4be32ca2b18a11aeaab3aaceeea24539b9",
+            "0ec67c0663f1a51b85d0f0761611b11f1cd72daf585890fb053ce126d1fb2146",
+            "86029b0575dee756373fe34311d4edc19eb94b6dd610ce78a52bb3a3be287ddd",
+            "72573441380118b7204dd5fe4463cd179486e81a633bed44c21d1982087a7003",
+            "4032c23cc5ca2d21ebed91b2a7927a6339f005ea31a24686bb4f81d9c2d0d333",
+            "37aee93282cb806b9b0d073e4fba6f175703c28ffd8796bacb51cb441c09b7e6",
+            "735122a1a26bfa72838105b128d783f9f32c004ed5df45c3421a7edc09b562dd",
+            "94c695cca04e1ae827c6ba093bc96a718b93fa2b342421a1b01d16bf8db9d26b",
+        ]
+        system = pr.cargar_system("sp-0.4.0-1")
+        obtenidos = []
+        for i in range(30):
+            contexto = candidatos((i % 6) + 1, largo=30 + (i % 4) * 20)
+            if i % 3 == 0:
+                contexto.fragmentos_rag = [F_FORMULA, F_MUN]
+            historial = None if i % 2 else [{"pregunta": f"Pregunta previa {i}", "respuesta": f"Respuesta previa {i}"}]
+            resultado = ens.ensamblar(f"Pregunta fija {i} ¿qué ocurrió?", contexto, dict(META), system=system, historial=historial)
+            serializado = json.dumps(resultado, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            obtenidos.append(hashlib.sha256(serializado.encode("utf-8")).hexdigest())
+        self.assertEqual(obtenidos, esperados)
+
     def test_7_copia_del_backend_igual_a_la_del_repo_del_chatbot(self):
-        otra = Path(__file__).resolve().parents[2] / "techo360-chatbot" / "prompts"
-        if not (otra / "sp-0.4.0-1.txt").exists():
+        raiz = Path(__file__).resolve().parents[2]
+        candidatos = [raiz / "techo360-chatbot-wt-ds71" / "prompts", raiz / "techo360-chatbot" / "prompts"]
+        otra = next((p for p in candidatos if (p / "sp-0.4.1-1.txt").exists()), None)
+        if otra is None:
             self.skipTest("techo360-chatbot no esta junto a techo360-backend")
-        self.assertEqual((otra / "sp-0.4.0-1.txt").read_bytes(), (pr.DIRECTORIO_PROMPTS / "sp-0.4.0-1.txt").read_bytes())
-        self.assertEqual(pr.leer_indice(otra), pr.leer_indice())
+        for version in ("sp-0.4.0-1", "sp-0.4.1-1"):
+            self.assertEqual((otra / f"{version}.txt").read_bytes(), (pr.DIRECTORIO_PROMPTS / f"{version}.txt").read_bytes())
+            self.assertEqual(pr.sha256_de(version, otra), pr.leer_indice()[version]["sha256"])
 
 
 class Coherencia(unittest.TestCase):
