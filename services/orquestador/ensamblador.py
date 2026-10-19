@@ -23,7 +23,7 @@ TOKENS_SYSTEM = 241  # medido con el tokenizer de Llama 3.2 (claude/fase2-6)
 TOKENS_PLANTILLA = 40  # encabezados de rol, fecha y etiquetas CONTEXTO / PREGUNTA (medido ~35)
 PRESUPUESTO_ENTRADA = 2048 - 400
 _DELIMITADORES = {"CONTEXTO", "PREGUNTA DEL USUARIO", "DOCUMENTOS"}
-_ETIQUETA_ID = re.compile(r"^\s*\[c\d+\]", re.IGNORECASE)
+_ETIQUETA_ID = re.compile(r"^\s*\[[cd]\d+\]", re.IGNORECASE)  # [cN] datos, [dN] fragmentos del RAG
 
 
 def sanear_pregunta(texto: str) -> tuple[str, bool]:
@@ -75,6 +75,7 @@ def ensamblar(pregunta: str, contexto: ContextoConstruido, metadatos: dict, syst
         "notas": {
             "pregunta_cortada": cortada,
             "omitidos": omitidos,
+            "rag_fragmentos": list(contexto.rag_usados),
             "tokens_estimados": total,
             "dentro_del_presupuesto": total <= PRESUPUESTO_ENTRADA,
         },

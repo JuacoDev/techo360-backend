@@ -3,8 +3,10 @@ Determinista, sin modelo, sin escrituras.
 
 validar_cifras(texto, lineas_contexto, items, pregunta) -> {"estado": "ok"|"abstencion"|"no_validada", "no_validadas": [...]}
 
-Se extraen los numeros del texto de la respuesta (94,2 % | 94.2 | 4.012 | 4012 | 1,5 millones). No se validan:
-años 2000-2042 que esten en el contexto o en la pregunta, numeracion de listas y numeros dentro de palabras o
+Se extraen los numeros del texto de la respuesta (94,2 % | 94.2 | 4.012 | 4 012 | 4012 | 1,5 millones).
+Las lineas [dN] del RAG (6.6) cuentan como contexto igual que las [cN]: sus numeros (incluidos los de la fecha de
+la fuente) validan cifras del texto. Eso es deliberado: el fragmento es texto aprobado que el modelo puede citar.
+No se validan: años 2000-2042 que esten en el contexto o en la pregunta, numeracion de listas y numeros dentro de palabras o
 codigos. Regla: cada numero debe aparecer en las lineas de contexto, con tolerancia de formato; se acepta
 redondeo A MENOS decimales que el contexto (94,2 -> 94 o 94,2; no 94,3).
 
@@ -28,7 +30,7 @@ from itertools import combinations
 ESCALAS = {"mil": 1e3, "millon": 1e6, "millones": 1e6, "billon": 1e12, "billones": 1e12}
 # numero con miles en punto (4.012 | 1.234.567), decimal en coma o punto, o entero; con signo y escala opcionales
 _NUMERO = re.compile(
-    r"(?<![\w.,])(?P<signo>[-−–])?(?P<num>\d{1,3}(?:\.\d{3})+(?:,\d+)?|\d+(?:[.,]\d+)?)(?![\w])"
+    r"(?<![\w.,])(?P<signo>[-−–])?(?P<num>\d{1,3}(?:\.\d{3})+(?:,\d+)?|\d{1,3}(?:[ \u00a0]\d{3})+(?:,\d+)?|\d+(?:[.,]\d+)?)(?![\w])"
     r"(?:\s*%)?(?:\s+(?P<escala>mil|millon|millones|billon|billones)\b)?",
     re.IGNORECASE,
 )
@@ -67,8 +69,8 @@ class Numero:
 
 def _parsear(cruda: str) -> tuple[float, int]:
     """'4.012' -> (4012, 0); '94,2' -> (94.2, 1); '94.2' -> (94.2, 1); '1.234.567,5' -> (1234567.5, 1)."""
-    if re.fullmatch(r"\d{1,3}(?:\.\d{3})+(?:,\d+)?", cruda):
-        entero, _, dec = cruda.replace(".", "").partition(",")
+    if re.fullmatch(r"\d{1,3}(?:[. \u00a0]\d{3})+(?:,\d+)?", cruda):  # miles con punto o espacio (corpus del RAG: «1 122»)
+        entero, _, dec = re.sub(r"[. \u00a0]", "", cruda).partition(",")
         return float(entero + ("." + dec if dec else "")), len(dec)
     if "," in cruda:
         entero, dec = cruda.split(",", 1)

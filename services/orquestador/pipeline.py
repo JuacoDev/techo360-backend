@@ -15,6 +15,7 @@ se entrega ni se guarda (solo cuantas cifras fallaron).
 """
 import asyncio
 import logging
+import re
 import time
 from datetime import date
 
@@ -39,7 +40,7 @@ TEXTO_SIN_DATOS = "No pude redactar una explicación con cifras verificadas y no
 
 def respuesta_determinista(lineas: list[str]) -> str:
     """Plantilla armada SOLO con las lineas del contexto (sin los ids [cN])."""
-    limpias = [l.split("] ", 1)[1] if l.startswith("[c") and "] " in l else l for l in lineas]
+    limpias = [l.split("] ", 1)[1] if re.match(r"\[[cd]\d+\] ", l) else l for l in lineas]
     if not limpias:
         return TEXTO_SIN_DATOS
     return NOTA_FALLBACK + "\n" + "\n".join(f"- {l}" for l in limpias)

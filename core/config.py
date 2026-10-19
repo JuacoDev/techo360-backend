@@ -117,6 +117,12 @@ class Settings(BaseSettings):
     # el backend. Reversa: apagarlo y recrear el backend.
     chatbot_orquestador_activo: bool = False
 
+    # Fase 6 (RAG curado, 6.6): con el orquestador activo, las preguntas CONCEPTUALES (definicion, metodo, relacion;
+    # nunca las de datos) añaden hasta 2 fragmentos del corpus aprobado (rag_fragmentos, migracion 0005) al contexto.
+    # False (por defecto) = sin RAG. Requiere la 0005 aplicada (6.8, [AUT]); si las tablas faltan o la consulta
+    # falla, la respuesta sigue sin fragmentos. Reversa: apagarlo y recrear el backend.
+    chatbot_rag_activo: bool = False
+
     # /otp/request: tope por IP en la ventana de 15 min y por dia (ver services/otp_service.py). Variables
     # OTP_IP_RATE_LIMIT_MAX (1..100) y OTP_IP_DAILY_MAX (1..500); vacio, no numerico, <= 0 o mayor que el
     # maximo -> el valor por defecto (10 y 150).
