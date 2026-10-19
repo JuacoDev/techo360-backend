@@ -123,6 +123,12 @@ class Settings(BaseSettings):
     # falla, la respuesta sigue sin fragmentos. Reversa: apagarlo y recrear el backend.
     chatbot_rag_activo: bool = False
 
+    # 6.7b: tope de tokens del prompt. Ollama, si el prompt no cabe en num_ctx, desplaza el contexto y descarta el
+    # system a mitad de la generacion SIN error. Mismos valores que el Modelfile (num_ctx 3072) y que el cliente del
+    # chatbot (num_predict 400): el presupuesto de entrada es OLLAMA_NUM_CTX - OLLAMA_NUM_PREDICT - 64.
+    ollama_num_ctx: int = 3072
+    ollama_num_predict: int = 400
+
     # /otp/request: tope por IP en la ventana de 15 min y por dia (ver services/otp_service.py). Variables
     # OTP_IP_RATE_LIMIT_MAX (1..100) y OTP_IP_DAILY_MAX (1..500); vacio, no numerico, <= 0 o mayor que el
     # maximo -> el valor por defecto (10 y 150).
