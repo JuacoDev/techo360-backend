@@ -1,14 +1,23 @@
 """4.3 Ensamblador de mensajes (fase4-especificacion-1). Sin historial; sin escrituras.
 
 mensajes = [system, user]; user = "CONTEXTO\\n<lineas>\\n\\nPREGUNTA DEL USUARIO\\n<pregunta saneada>".
-Presupuesto de entrada: system (241 tokens medidos) + plantilla + contexto + pregunta <= 1.648 tokens
-(num_ctx 2048 - NUM_PREDICT 400); si se excede se recorta el CONTEXTO, nunca el system ni la pregunta.
+Presupuesto de entrada (6.7b): system + plantilla + contexto + RAG + pregunta <= OLLAMA_NUM_CTX - OLLAMA_NUM_PREDICT - 64
+(3072 - 400 - 64 = 2.608 tokens), estimado con 2,3 caracteres por token TAMBIEN para el system (optimista seria 3,0:
+Ollama descarta el system sin error si el prompt no cabe). Si se excede, en este orden: 1) se quitan fragmentos del RAG
+(el menos relevante primero), 2) se recortan las lineas de contexto de menor prioridad (las ultimas; las lineas
+obligatorias «Sin dato» y de ubicacion no se tocan), 3) si aun asi no cabe (la pregunta sola no cabe) no se arma peticion
+valida: notas["pregunta_no_cabe"] = True y el orquestador responde un mensaje fijo SIN llamar al modelo.
+Nunca se recorta el system ni la pregunta.
 La salida cumple el esquema PeticionV2 del contrato 2.2 (schemas/chatbot_contrato_v2.py).
 """
+import math
 import re
 import unicodedata
+from dataclasses import replace
 
+from core.config import settings
 from services.orquestador.contexto import (
+    CARACTERES_POR_TOKEN,
     LINEA_SIN_CONTEXTO,
     MAX_ELEMENTOS,
     MAX_TOKENS_CONTEXTO,
@@ -19,11 +28,22 @@ from services.orquestador.contexto import (
 from services.orquestador.prompts import VERSION_PROMPT_ACTUAL, cargar_system
 
 MAX_PREGUNTA = 1500
-TOKENS_SYSTEM = 241  # medido con el tokenizer de Llama 3.2 (claude/fase2-6)
 TOKENS_PLANTILLA = 40  # encabezados de rol, fecha y etiquetas CONTEXTO / PREGUNTA (medido ~35)
-PRESUPUESTO_ENTRADA = 2048 - 400
+CARACTERES_POR_TOKEN_PROMPT = 2.3  # conservador para TODO el prompt (el contexto de datos conserva 3,0 en contexto.py)
+MARGEN_TOKENS = 64
+NUM_CTX = settings.ollama_num_ctx
+NUM_PREDICT = settings.ollama_num_predict
+PRESUPUESTO_ENTRADA = NUM_CTX - NUM_PREDICT - MARGEN_TOKENS
+MENSAJE_PREGUNTA_LARGA = (
+    "Tu pregunta es demasiado larga para que pueda responderla. ¿Puedes acortarla o dividirla en preguntas más "
+    "cortas?"
+)
 _DELIMITADORES = {"CONTEXTO", "PREGUNTA DEL USUARIO", "DOCUMENTOS"}
 _ETIQUETA_ID = re.compile(r"^\s*\[[cd]\d+\]", re.IGNORECASE)  # [cN] datos, [dN] fragmentos del RAG
+
+
+def estimar_tokens_prompt(texto: str) -> int:
+    return math.ceil(len(texto) / CARACTERES_POR_TOKEN_PROMPT) + 1
 
 
 def sanear_pregunta(texto: str) -> tuple[str, bool]:
@@ -54,14 +74,27 @@ def ensamblar(pregunta: str, contexto: ContextoConstruido, metadatos: dict, syst
     intento si se conocen. Se anade version_prompt."""
     system = cargar_system() if system is None else system
     saneada, cortada = sanear_pregunta(pregunta)
-    tope_contexto = MAX_TOKENS_CONTEXTO
-    while True:
-        items, lineas, omitidos = contexto.seleccionar(MAX_ELEMENTOS, tope_contexto)
+    base = TOKENS_PLANTILLA + estimar_tokens_prompt(system)
+
+    def armar(ctx, tope):
+        items, lineas, omitidos = ctx.seleccionar(MAX_ELEMENTOS, tope)
         contenido = mensaje_usuario(lineas, saneada)
-        total = TOKENS_SYSTEM + TOKENS_PLANTILLA + estimar_tokens(contenido)
-        if total <= PRESUPUESTO_ENTRADA or tope_contexto <= 0:
-            break
-        tope_contexto = max(0, tope_contexto - max(10, total - PRESUPUESTO_ENTRADA))
+        return items, omitidos, contenido, base + estimar_tokens_prompt(contenido)
+
+    # 1) si no cabe, fuera fragmentos del RAG (el menos relevante primero)
+    ctx, tope_contexto = contexto, MAX_TOKENS_CONTEXTO
+    items, omitidos, contenido, total = armar(ctx, tope_contexto)
+    quitar = len(ctx.rag_usados)
+    while total > PRESUPUESTO_ENTRADA and quitar > 0:
+        quitar -= 1
+        ctx = replace(contexto, fragmentos_rag=contexto.fragmentos_rag[:quitar], rag_usados=[])
+        items, omitidos, contenido, total = armar(ctx, tope_contexto)
+    # 2) luego las lineas de contexto de menor prioridad (las ultimas); el tope se expresa en tokens de contexto (3,0)
+    while total > PRESUPUESTO_ENTRADA and tope_contexto > 0:
+        exceso = (total - PRESUPUESTO_ENTRADA) * CARACTERES_POR_TOKEN_PROMPT / CARACTERES_POR_TOKEN
+        tope_contexto = max(0, tope_contexto - max(10, math.ceil(exceso)))
+        items, omitidos, contenido, total = armar(ctx, tope_contexto)
+    pregunta_no_cabe = total > PRESUPUESTO_ENTRADA  # 3) ni sin contexto opcional: la pregunta sola no cabe
     peticion = {
         "version_contrato": 2,
         "mensajes": [{"rol": "system", "contenido": system}, {"rol": "user", "contenido": contenido}],
@@ -75,8 +108,9 @@ def ensamblar(pregunta: str, contexto: ContextoConstruido, metadatos: dict, syst
         "notas": {
             "pregunta_cortada": cortada,
             "omitidos": omitidos,
-            "rag_fragmentos": list(contexto.rag_usados),
+            "rag_fragmentos": list(ctx.rag_usados),
             "tokens_estimados": total,
-            "dentro_del_presupuesto": total <= PRESUPUESTO_ENTRADA,
+            "dentro_del_presupuesto": not pregunta_no_cabe,
+            "pregunta_no_cabe": pregunta_no_cabe,
         },
     }

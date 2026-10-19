@@ -11,7 +11,7 @@ from datetime import date
 from core.config import settings
 from services.orquestador import rag
 from services.orquestador.contexto import construir_contexto
-from services.orquestador.ensamblador import ensamblar
+from services.orquestador.ensamblador import MENSAJE_PREGUNTA_LARGA, ensamblar
 from services.orquestador.intencion import intencion_conceptual
 from services.orquestador.resolutor import cargar_catalogo, resolver
 
@@ -28,4 +28,6 @@ async def preparar_consulta(pregunta: str, db, metadatos: dict, *, hoy: date | N
     if settings.chatbot_rag_activo and intencion_conceptual(pregunta, resolucion):
         contexto.fragmentos_rag = await rag.recuperar(pregunta, rag_fn)
     resultado = ensamblar(pregunta, contexto, metadatos)
+    if resultado["notas"]["pregunta_no_cabe"]:  # 6.7b: ni sin contexto cabe en num_ctx; mensaje fijo, sin llamar al modelo
+        return {"accion": "aclarar", "tipo": "pregunta_larga", "texto": MENSAJE_PREGUNTA_LARGA}
     return {"accion": "consultar", "resolucion": resolucion.a_dict(), **resultado}

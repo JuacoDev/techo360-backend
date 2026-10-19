@@ -35,6 +35,17 @@ _PATRONES = tuple(re.compile(p) for p in (
     r"\bcual (?:es|son) (?:la|las|el|los) (?:unidad|definicion|formula|metodologia|fuente|fuentes|diferencia|escala|limitacion|limitaciones)\b",
     r"\bpuede (?:el|la) (?:score|indice|ipm|dato|valor)\b",
     r"\b(?:explica|explicame|define|definir|describe|describeme)\b",
+    # 6.7b: redacciones mas generales (misma familia: definicion, metodo, relacion, procedencia, interpretacion)
+    r"\bque tan [a-z]+\b",
+    r"\bque (?:pasa|ocurre|sucede) (?:con|si|cuando|en)\b",
+    r"\bpara que (?:sirve|sirven|se usa|se usan|se utiliza|se utilizan)\b",
+    r"\ba que se (?:refiere|refieren)\b|\bque se entiende por\b|\bsignificado de\b",
+    r"\bque (?:incluye|incluyen|contiene|contienen|abarca|abarcan|comprende|comprenden|considera|consideran)\b",
+    r"\b(?:incluye|incluyen|contiene|contienen|abarca|abarcan|comprende|comprenden)\b",
+    r"\bcomo (?:debo|puedo|podria|se debe|hay que|deberia) (?:interpretar|leer|entender|usar|tomar|considerar|distinguir)\b",
+    r"\bcomo (?:leo|entiendo|uso|interpretar|leer|entender)\b",
+    r"\bquien (?:produce|genera|recoge|reporta|provee|proporciona|suministra|mide|estima|proyecta)\b",
+    r"\b(?:es|son) (?:confiables?|fiables?|oficial(?:es)?|exactos?|exactas?|precisos?|precisas?)\b",
 ))
 _DOMINIO = frozenset({
     "score", "ipm", "indice", "privacion", "pobreza", "multidimensional", "conpes", "dane", "dnp", "deficit",
@@ -44,12 +55,15 @@ _DOMINIO = frozenset({
     "divipola", "municipio", "municipios", "municipalizadas", "litigio", "hogar", "hogares", "dimensiones",
     "indicadores", "asistente", "chat", "mensaje", "mensajes", "panel", "insignia", "plataforma", "techo",
     "cnpv", "censo", "upra", "igac", "catastro", "predios",
+    # 6.7b: vocabulario de la plataforma (siempre exige ademas un patron). Se evitan palabras comunes (mapa, color, fuente,
+    # variable): «¿Que es un mapa mental?» no debe consultar el RAG
+    "prioridad", "intervencion", "cifra", "cifras", "poligono", "poligonos", "proyectada", "proyectadas",
 })
 _INYECCION = re.compile(
     r"\b(?:ignora|ignore|olvida|omite|salta|desactiva|revela|muestrame|dime|imprime|repite)\b.*\b(?:reglas|instrucciones|prompt|sistema|system|configuracion|internas?)\b"
     r"|\b(?:instrucciones|reglas|prompt) (?:internas?|del sistema|ocultas?)\b|\bsystem prompt\b|\bjailbreak\b|\bdeveloper mode\b"
 )
-_CIFRA_PEDIDA = re.compile(r"\b(?:cuanto|cuantos habitantes|cuantas personas|ranking|mas alto|mas bajo|mayor score|promedio)\b")
+_CIFRA_PEDIDA = re.compile(r"\b(?:cuanto(?! pesa)|cuantos habitantes|cuantas personas|ranking|mas alto|mas bajo|mayor score|promedio)\b")
 
 
 def intencion_conceptual(texto: str, resolucion) -> bool:
