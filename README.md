@@ -1,5 +1,78 @@
 # techo360-backend
 
+## Resumen
+
+API FastAPI de Techo 360.
+Gestiona autenticacion, datos del mapa de calor y reportes.
+Expone los contratos HTTP usados por el frontend.
+Coordina chatbot, proyeccion, Redis, RabbitMQ y PostgreSQL.
+Incluye ingestion, migraciones, servicios y pruebas unitarias.
+
+## Uso local
+
+```bash
+pip install -r requirements.txt
+DESACTIVAR_TAREAS_DE_FONDO=1 uvicorn main:app --reload
+```
+
+El backend requiere PostgreSQL, Redis y RabbitMQ accesibles si se ejercitan
+las rutas que dependen de ellos. El valor `1` evita iniciar tareas y consumers
+de fondo durante el desarrollo local; el comportamiento sin esa variable no
+se debe usar contra servicios compartidos.
+
+## Variables de entorno
+
+| Nombre | Para que sirve | Valor por defecto |
+|---|---|---|
+| `DATABASE_URL` | Base principal | TODO: verificar en `core/config.py` |
+| `DATABASE_USERS_URL` | Usuarios y logs | TODO: verificar en `core/config.py` |
+| `DATABASE_VECTOR_URL` | Datos vectoriales y chatbot | TODO: verificar en `core/config.py` |
+| `REDIS_URL` | Cache, OTP y limites | TODO: verificar en `core/config.py` |
+| `RABBITMQ_URL` | RPC y colas | TODO: verificar en `core/config.py` |
+| `DESACTIVAR_TAREAS_DE_FONDO` | Desactiva tareas y consumers locales | apagado |
+| `CHATBOT_BLOQUEO_PENDIENTES` | Bloquea otro envio pendiente | apagado |
+| `CHATBOT_RAG_ACTIVO` | Activa RAG del chatbot | TODO: verificar |
+| `CHATBOT_ORQUESTADOR_ACTIVO` | Activa el orquestador | TODO: verificar |
+| `RPC_TIMEOUT_SECONDS` | Tope del RPC | `200` |
+| `TECHO360_PRUEBAS_BD` | Habilita configuracion de pruebas BD | TODO: verificar |
+| `TECHO360_DATOS_REALES` | Habilita pruebas con datos reales | apagado |
+| `PG_BIN` | Binarios PostgreSQL para pruebas | no definido |
+| `MIGRACION_0002_SQL` | Ruta de migracion para pruebas | no definido |
+| `TECHO360_ZONAS_JSON` | Fixture JSON de zonas | no definido |
+| `TECHO360_TEST_REDIS` | Redis para pruebas | no definido |
+
+No se documentan valores de credenciales, tokens, contrasenas ni URLs con
+secretos. Los defaults que no estan comprobados quedan marcados como `TODO`.
+
+## Pruebas
+
+```bash
+python -m routers.tests_chatbot_estados
+python -m services.tests_zonas_cache
+python -m services.tests_contrato_proyeccion
+python -m unittest discover
+```
+
+Las pruebas PostgreSQL reales requieren `PG_BIN` y `MIGRACION_0002_SQL` y no
+deben ejecutarse contra una base compartida sin autorizacion.
+
+## Estructura
+
+`core/` configuracion; `models/` modelos; `routers/` endpoints; `schemas/`
+contratos; `services/` logica; `ingestion/` cargas; `scripts/` utilidades;
+`migrations/` cambios de esquema.
+
+## Banderas del chatbot
+
+`CHATBOT_BLOQUEO_PENDIENTES`, `CHATBOT_RAG_ACTIVO` y
+`CHATBOT_ORQUESTADOR_ACTIVO` deben permanecer apagadas por defecto. El
+comportamiento exacto de las dos ultimas requiere verificacion en codigo:
+`TODO`.
+
+## Documentacion de fases
+
+[techo360-claude](https://github.com/JuacoDev/techo360-claude)
+
 API FastAPI de Techo 360.
 
 <!-- Prueba de despliegue automatico: 2026-07-27 11:03:25 -->
