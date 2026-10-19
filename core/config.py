@@ -110,6 +110,25 @@ class Settings(BaseSettings):
     chatbot_max_en_proceso_por_usuario: int = 2
     chatbot_max_cola: int = 10
 
+    # Fase 4 (orquestador): interruptor del pipeline v2 (resolutor de entidades, contexto de datos, contrato RPC v2,
+    # validador de cifras, sanitizacion y metadatos de la migracion 0004). False (por defecto) = el comportamiento de
+    # siempre (contrato v1). Orden de despliegue (fase2-2 seccion 6): primero actualizar TODOS los consumers del chatbot
+    # (VPS y workers) a la version que acepta v1 y v2, despues activar con CHATBOT_ORQUESTADOR_ACTIVO=true y recrear
+    # el backend. Reversa: apagarlo y recrear el backend.
+    chatbot_orquestador_activo: bool = False
+
+    # Fase 6 (RAG curado, 6.6): con el orquestador activo, las preguntas CONCEPTUALES (definicion, metodo, relacion;
+    # nunca las de datos) añaden hasta 2 fragmentos del corpus aprobado (rag_fragmentos, migracion 0005) al contexto.
+    # False (por defecto) = sin RAG. Requiere la 0005 aplicada (6.8, [AUT]); si las tablas faltan o la consulta
+    # falla, la respuesta sigue sin fragmentos. Reversa: apagarlo y recrear el backend.
+    chatbot_rag_activo: bool = False
+
+    # 6.7b: tope de tokens del prompt. Ollama, si el prompt no cabe en num_ctx, desplaza el contexto y descarta el
+    # system a mitad de la generacion SIN error. Mismos valores que el Modelfile (num_ctx 3072) y que el cliente del
+    # chatbot (num_predict 400): el presupuesto de entrada es OLLAMA_NUM_CTX - OLLAMA_NUM_PREDICT - 64.
+    ollama_num_ctx: int = 3072
+    ollama_num_predict: int = 400
+
     # /otp/request: tope por IP en la ventana de 15 min y por dia (ver services/otp_service.py). Variables
     # OTP_IP_RATE_LIMIT_MAX (1..100) y OTP_IP_DAILY_MAX (1..500); vacio, no numerico, <= 0 o mayor que el
     # maximo -> el valor por defecto (10 y 150).

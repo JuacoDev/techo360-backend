@@ -18,6 +18,11 @@ TTL_SEGUNDOS = 36 * 60 * 60
 # TODAS las entradas de zonas sin tocar Redis a mano.
 VERSION_ZONAS = "v3"
 
+# Version de la clave de los puntos calculados bajo demanda (3.1/3.2). Cambiar un metodo de
+# services/proyeccion_service.completar_puntos (o de techo360-proyeccion/app/services/puntos.py)
+# obliga a subirla para no servir valores del metodo anterior hasta por TTL_SEGUNDOS (36 h).
+VERSION_PUNTO = "v3"
+
 # Los limites min-max de 2024 cambiaron de CONTENIDO el 2026-10-10 (ahora solo sobre los municipios
 # del universo, sin los codigos huerfanos): las entradas `proyeccion:v2:limites_base:*` que siguen
 # vivas en produccion (TTL 36 h) tienen la escala vieja y no deben leerse.
@@ -81,6 +86,17 @@ class ProyeccionCache:
 
     async def guardar_zonas(self, indicador: str, anio: int, zonas: list[dict]) -> None:
         await self._redis.set(self._clave_zonas(indicador, anio), json.dumps(zonas), ex=TTL_SEGUNDOS)
+
+    @staticmethod
+    def _clave_punto(indicador: str, codigo: str, anio: int) -> str:
+        return f"proyeccion:{VERSION_PUNTO}:punto:{indicador}:{codigo}:{anio}"
+
+    async def obtener_punto(self, indicador: str, codigo: str, anio: int) -> dict | None:
+        crudo = await self._redis.get(self._clave_punto(indicador, codigo, anio))
+        return json.loads(crudo) if crudo is not None else None
+
+    async def guardar_punto(self, indicador: str, codigo: str, anio: int, punto: dict) -> None:
+        await self._redis.set(self._clave_punto(indicador, codigo, anio), json.dumps(punto), ex=TTL_SEGUNDOS)
 
     async def obtener_limites_base(self, anio_base: int) -> dict | None:
         crudo = await self._redis.get(self._clave_limites_base(anio_base))

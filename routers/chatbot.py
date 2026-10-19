@@ -198,13 +198,15 @@ async def enviar_mensaje(
     mensaje_usuario = chatbot_service.agregar_mensaje(db, conversacion.id, "usuario", datos.contenido)
 
     try:
-        respuesta = await solicitar_chatbot(
+        respuesta = await _pedir_respuesta(
             {
                 "mensaje": datos.contenido,
                 "usuario_id": current_user.id,
                 "consentimiento_entrenamiento": conversacion.consentimiento_entrenamiento,
                 "conversacion_id": conversacion.id,
-            }
+            },
+            db_usuarios,
+            datos.contenido,
         )
     except ChatbotTimeoutError as error:
         raise HTTPException(status_code=504, detail=str(error)) from error
@@ -221,11 +223,27 @@ async def enviar_mensaje(
             raise HTTPException(status_code=503, detail=detail)
         raise HTTPException(status_code=502, detail=detail)
 
-    mensaje_asistente = chatbot_service.agregar_mensaje(
-        db, conversacion.id, "asistente", respuesta["response"]
-    )
+    # Con el orquestador apagado no hay "_v2": misma llamada de siempre.
+    extra = {"metadatos": respuesta["_v2"]} if respuesta.get("_v2") is not None else {}
+    mensaje_asistente = chatbot_service.agregar_mensaje(db, conversacion.id, "asistente", respuesta["response"], **extra)
 
     return IntercambioResponse(mensaje_usuario=mensaje_usuario, mensaje_asistente=mensaje_asistente)
+
+
+async def _pedir_respuesta(payload: dict, db_datos: Session, contenido: str) -> dict:
+    """Pide la respuesta al asistente. Con CHATBOT_ORQUESTADOR_ACTIVO apagado (por defecto) es exactamente
+    `solicitar_chatbot(payload)`, el contrato v1 de siempre. Encendido: pipeline v2 del orquestador (resolutor,
+    contexto, RPC v2, validador de cifras, sanitizacion). Devuelve la misma forma de respuesta que el camino v1
+    ({"status", "response" | "tipo", "detail"}) mas "_v2" con los metadatos a guardar (4.8)."""
+    if not settings.chatbot_orquestador_activo:
+        return await solicitar_chatbot(payload)
+    from services.orquestador.pipeline import responder
+
+    metadatos = {k: payload[k] for k in ("usuario_id", "consentimiento_entrenamiento", "conversacion_id", "mensaje_id", "intento") if k in payload}
+    resultado = await responder(contenido, db_datos, metadatos)
+    if resultado["accion"] == "error":
+        return {"status": "error", "tipo": resultado["tipo"], "detail": resultado["detail"]}
+    return {"status": "ok", "response": resultado["texto"], "_v2": resultado["meta"]}
 
 
 def _json_mensaje(mensaje: Mensaje | None):
@@ -300,7 +318,7 @@ async def _procesar(
     db_usuarios.rollback()
 
     try:
-        respuesta = await solicitar_chatbot(payload)
+        respuesta = await _pedir_respuesta(payload, db_usuarios, payload["mensaje"])
     except ChatbotTimeoutError as error:
         return _fallo(db, mensaje_id, intento, 504, str(error), chatbot_estados.DETALLE_TIMEOUT)
     except asyncio.CancelledError:
@@ -324,7 +342,8 @@ async def _procesar(
         texto = respuesta["response"]
         if not isinstance(texto, str) or not texto.strip():
             raise ValueError("respuesta del asistente vacia")
-        cerrado = chatbot_estados.cerrar_respondido(db, mensaje_id, texto, intento)
+        extra = {"metadatos": respuesta["_v2"]} if respuesta.get("_v2") is not None else {}
+        cerrado = chatbot_estados.cerrar_respondido(db, mensaje_id, texto, intento, **extra)
     except Exception:
         # Respuesta mal formada o fallo de la BD al cerrar: el mensaje NO puede quedar
         # 'procesando' (bloquearia la conversacion hasta el barrido de 4 min).

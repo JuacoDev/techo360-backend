@@ -1,0 +1,2 @@
+# El system prompt se verifica por sha256: los bytes no deben cambiar con la conversion de saltos de linea.
+prompts/*.txt -text
