@@ -33,6 +33,8 @@ se debe usar contra servicios compartidos.
 | `CHATBOT_BLOQUEO_PENDIENTES` | Bloquea otro envio pendiente | apagado |
 | `CHATBOT_RAG_ACTIVO` | Activa RAG del chatbot | TODO: verificar |
 | `CHATBOT_ORQUESTADOR_ACTIVO` | Activa el orquestador | TODO: verificar |
+| `CHATBOT_SYSTEM_VERSION` | Version del system prompt | `sp-0.4.0-1` |
+| `CHATBOT_HISTORIAL_ACTIVO` | Activa el historial del chatbot | apagada |
 | `RPC_TIMEOUT_SECONDS` | Tope del RPC | `200` |
 | `TECHO360_PRUEBAS_BD` | Habilita configuracion de pruebas BD | TODO: verificar |
 | `TECHO360_DATOS_REALES` | Habilita pruebas con datos reales | apagado |
@@ -71,7 +73,7 @@ comportamiento exacto de las dos ultimas requiere verificacion en codigo:
 
 ## Documentacion de fases
 
-[techo360-claude](https://github.com/JuacoDev/techo360-claude)
+La documentacion de fases se mantiene fuera de este repositorio.
 
 API FastAPI de Techo 360.
 

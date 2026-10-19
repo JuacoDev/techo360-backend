@@ -2,6 +2,8 @@
 
 La numeracion es una reconstruccion documental del historial y de PRs fusionados. No existen tags semanticos que conviertan estas entradas en releases auditables.
 
+La documentacion de fases se mantiene fuera de este repositorio.
+
 ## Sin publicar
 
 ### 0.4.1
