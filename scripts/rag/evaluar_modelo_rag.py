@@ -1,7 +1,7 @@
 """Paso 6.6 / prueba con el modelo: techo360-chatbot:v0.4.0 (Ollama local) con el contexto REAL del orquestador.
 
 Brazos (3 corridas, semillas 1-3, temperatura 0,3 y demas opciones de produccion; num_thread limitado):
-  ctx40_rag   las 40 preguntas conceptuales de claude/fase6-4-preguntas.jsonl con el contexto RAG ensamblado por
+  ctx40_rag   las preguntas conceptuales de claude/fase6-4-preguntas.jsonl con el contexto RAG ensamblado por
               preparar_consulta (CHATBOT_RAG_ACTIVO simulado) contra la base LOCAL con el corpus
   ctx40_sin   las mismas 40 sin RAG (linea de comparacion; no la pedia la tarea)
   c3_sin      las 20 C3 de extra_5_6b.jsonl tal como estan (CONTEXTO: Sin datos disponibles)
@@ -117,6 +117,7 @@ def main() -> int:
     ap.add_argument("--modelo", default="techo360-chatbot:v0.4.0")
     ap.add_argument("--corridas", type=int, default=3)
     ap.add_argument("--hilos", type=int, default=3)
+    ap.add_argument("--excluir", nargs="*", default=[], help="ids de pregunta que no se evaluan (p. ej. rag-39)")
     a = ap.parse_args()
     dsn = os.environ.get("RAG_TEST_DATABASE_URL") or sys.exit("Falta RAG_TEST_DATABASE_URL (base LOCAL)")
     if not re.search(r"@(?:localhost|127\.0\.0\.1)[:/]", dsn):
@@ -131,7 +132,7 @@ def main() -> int:
             s.rollback()
             s.close()
 
-    conc = [p for p in leer_jsonl(a.preguntas) if p["tipo"] == "conceptual"]
+    conc = [p for p in leer_jsonl(a.preguntas) if p["tipo"] == "conceptual" and p["id"] not in a.excluir]
     c3 = [p for p in leer_jsonl(a.extra) if p["subfamilia"] == "C3"]
     tareas = []  # (brazo, id, pregunta, con_rag)
     for p in conc:
