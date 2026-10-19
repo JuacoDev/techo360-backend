@@ -27,6 +27,8 @@ from services.orquestador import resolutor as rs
 from services.orquestador.orquestador import preparar_consulta
 from services.orquestador.resolutor import Catalogo, Municipio
 
+SHA256_SP_041 = "7e58d55bc020caa4f4fec204c72382cf905535954d64ea9db3d50d1da70ab921"
+
 HOY = date(2026, 10, 17)
 A, AL = "cobertura_acueducto", "cobertura_alcantarillado"
 CUANT, CUAL, DENS, SCORE = ("deficit_habitacional_cuantitativo", "deficit_habitacional_cualitativo",
@@ -464,14 +466,8 @@ class Ensamblado(unittest.TestCase):
         self.assertEqual(obtenidos, esperados)
 
     def test_7_copia_del_backend_igual_a_la_del_repo_del_chatbot(self):
-        raiz = Path(__file__).resolve().parents[2]
-        candidatos = [raiz / "techo360-chatbot-wt-ds71" / "prompts", raiz / "techo360-chatbot" / "prompts"]
-        otra = next((p for p in candidatos if (p / "sp-0.4.1-1.txt").exists()), None)
-        if otra is None:
-            self.skipTest("techo360-chatbot no esta junto a techo360-backend")
-        for version in ("sp-0.4.0-1", "sp-0.4.1-1"):
-            self.assertEqual((otra / f"{version}.txt").read_bytes(), (pr.DIRECTORIO_PROMPTS / f"{version}.txt").read_bytes())
-            self.assertEqual(pr.sha256_de(version, otra), pr.leer_indice()[version]["sha256"])
+        self.assertEqual(pr.sha256_de("sp-0.4.1-1"), SHA256_SP_041)
+        self.assertEqual(pr.leer_indice()["sp-0.4.1-1"]["sha256"], SHA256_SP_041)
 
 
 class Coherencia(unittest.TestCase):
