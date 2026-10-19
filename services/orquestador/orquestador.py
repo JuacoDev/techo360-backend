@@ -8,17 +8,24 @@ preparar_consulta(...) devuelve
 """
 from datetime import date
 
+from core.config import settings
+from services.orquestador import rag
 from services.orquestador.contexto import construir_contexto
 from services.orquestador.ensamblador import ensamblar
+from services.orquestador.intencion import intencion_conceptual
 from services.orquestador.resolutor import cargar_catalogo, resolver
 
 
-async def preparar_consulta(pregunta: str, db, metadatos: dict, *, hoy: date | None = None, catalogo=None, fijados=None, **inyecciones) -> dict:
+async def preparar_consulta(pregunta: str, db, metadatos: dict, *, hoy: date | None = None, catalogo=None, fijados=None, rag_fn=None, **inyecciones) -> dict:
     hoy = hoy or date.today()
     catalogo = catalogo or cargar_catalogo(db)
     resolucion = resolver(pregunta, catalogo, hoy, fijados)
     if resolucion.aclaracion is not None:
         return {"accion": "aclarar", **resolucion.aclaracion}
     contexto = await construir_contexto(resolucion, db, hoy_anio=hoy.year, **inyecciones)
+    # 6.6: RAG curado SOLO con CHATBOT_RAG_ACTIVO y pregunta conceptual (los datos numericos nunca van por RAG).
+    # `rag_fn` reemplaza la busqueda (pruebas); no activa el RAG por si solo.
+    if settings.chatbot_rag_activo and intencion_conceptual(pregunta, resolucion):
+        contexto.fragmentos_rag = await rag.recuperar(pregunta, rag_fn)
     resultado = ensamblar(pregunta, contexto, metadatos)
     return {"accion": "consultar", "resolucion": resolucion.a_dict(), **resultado}

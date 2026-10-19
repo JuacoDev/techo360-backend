@@ -1,0 +1,10 @@
+{"id": "val-a", "tipo": "conceptual", "pregunta": "¿Para qué sirve el Score que muestran en el mapa?", "fragmentos_esperados": ["01-formula", "01-variables"]}
+{"id": "val-b", "tipo": "conceptual", "pregunta": "Explícame qué mide el IPM", "fragmentos_esperados": ["02-ipm-definicion"]}
+{"id": "val-c", "tipo": "conceptual", "pregunta": "¿Cuántas variables tiene el IPM colombiano y cuánto pesa cada dimensión?", "fragmentos_esperados": ["02-ipm-dimensiones", "02-ipm-tabla"]}
+{"id": "val-d", "tipo": "conceptual", "pregunta": "¿De dónde vienen los datos de densidad?", "fragmentos_esperados": ["03-densidad"]}
+{"id": "val-e", "tipo": "conceptual", "pregunta": "¿Por qué algunos datos aparecen como estimaciones?", "fragmentos_esperados": ["03-dato-real-proyeccion", "04-principio-procedencia"]}
+{"id": "val-f", "tipo": "conceptual", "pregunta": "¿Qué pasa con los municipios sin polígono en el mapa?", "fragmentos_esperados": ["05-areas-no-municipalizadas"]}
+{"id": "val-g", "tipo": "conceptual", "pregunta": "¿El déficit cuantitativo incluye servicios públicos?", "fragmentos_esperados": ["03-deficit-componentes"]}
+{"id": "val-h", "tipo": "conceptual", "pregunta": "¿Por qué se proyecta el acueducto repitiendo el último valor?", "fragmentos_esperados": ["04-metodo-ultimo-valor-1"]}
+{"id": "val-n1", "tipo": "negativa", "pregunta": "¿Cuál fue la densidad de Pasto en 2020?", "fragmentos_esperados": []}
+{"id": "val-n2", "tipo": "negativa", "pregunta": "Cuéntame un chiste", "fragmentos_esperados": []}

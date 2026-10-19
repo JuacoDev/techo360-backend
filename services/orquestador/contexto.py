@@ -87,6 +87,9 @@ class Candidato:
 @dataclass
 class ContextoConstruido:
     candidatos: list[Candidato] = field(default_factory=list)
+    # fragmentos del RAG curado (6.6), por relevancia: SOLO preguntas conceptuales; van tras los datos estructurados
+    fragmentos_rag: list[dict] = field(default_factory=list)
+    rag_usados: list[str] = field(default_factory=list)  # ids de los fragmentos que entraron en la ultima seleccion
 
     def seleccionar(self, max_elementos: int = MAX_ELEMENTOS, max_tokens: int = MAX_TOKENS_CONTEXTO):
         """-> (items con id c1..cn, lineas de texto, omitidos). Las lineas Sin dato siempre entran."""
@@ -118,6 +121,13 @@ class ContextoConstruido:
             item = {"id": f"c{n}", **c.item}
             items.append(item)
             lineas.append(f"[c{n}] {c.texto}")
+        self.rag_usados = []
+        if self.fragmentos_rag:  # prioridad: el dato estructurado primero; el RAG usa lo que quede del presupuesto
+            from services.orquestador.rag import seleccionar_lineas  # import tardio: rag usa estimar_tokens de aqui
+            gastado = sum(estimar_tokens(l) for l in lineas) + (estimar_tokens(nota_omision(omitidos)) if omitidos else 0)
+            lineas_rag = seleccionar_lineas(self.fragmentos_rag, max_tokens - gastado)
+            self.rag_usados = [f["fragmento_id"] for f in self.fragmentos_rag[:len(lineas_rag)]]
+            lineas.extend(lineas_rag)
         if omitidos:
             lineas.append(nota_omision(omitidos))
         return items, lineas, omitidos
