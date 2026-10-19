@@ -112,13 +112,17 @@ class Resolucion:
     rango: tuple[int, int] | None = None
     anio_implicito: bool = True
     aclaracion: dict | None = None
+    heredado: list[str] = field(default_factory=list)  # 7.1b: campos tomados del turno anterior (herencia.py)
 
     def a_dict(self) -> dict:
-        return {
+        d = {
             "municipios": self.municipios, "variables": self.variables, "anios": self.anios,
             "rango": list(self.rango) if self.rango else None, "anio_implicito": self.anio_implicito,
             "aclaracion": self.aclaracion,
         }
+        if self.heredado:
+            d["heredado"] = list(self.heredado)
+        return d
 
 
 # ----------------------------------------------------------------------------------- años
