@@ -1,11 +1,16 @@
-"""4.3 Ensamblador de mensajes (fase4-especificacion-1). Sin historial; sin escrituras.
+"""4.3 Ensamblador de mensajes (fase4-especificacion-1). Sin escrituras.
 
 mensajes = [system, user]; user = "CONTEXTO\\n<lineas>\\n\\nPREGUNTA DEL USUARIO\\n<pregunta saneada>".
+Historial (7.1b / H1, adenda 7.1b seccion 3): con `historial` los ultimos 2 intercambios de la conversacion van ANTES del turno
+actual como mensajes de chat, SIN el CONTEXTO de turnos previos: [system, user(pregunta previa), assistant(respuesta
+previa), ..., user(CONTEXTO + PREGUNTA actual)]. Las preguntas previas se sanean como la actual; las respuestas solo se
+neutralizan (nunca se cortan). El historial ocupa a lo sumo MAX_TOKENS_HISTORIAL (400): se descarta el intercambio mas
+antiguo hasta que quepa, sin cortar nunca una respuesta a la mitad.
 Presupuesto de entrada (6.7b): system + plantilla + contexto + RAG + pregunta <= OLLAMA_NUM_CTX - OLLAMA_NUM_PREDICT - 64
 (3072 - 400 - 64 = 2.608 tokens), estimado con 2,3 caracteres por token TAMBIEN para el system (optimista seria 3,0:
 Ollama descarta el system sin error si el prompt no cabe). Si se excede, en este orden: 1) se quitan fragmentos del RAG
-(el menos relevante primero), 2) se recortan las lineas de contexto de menor prioridad (las ultimas; las lineas
-obligatorias «Sin dato» y de ubicacion no se tocan), 3) si aun asi no cabe (la pregunta sola no cabe) no se arma peticion
+(el menos relevante primero), 2) se descarta el historial (el intercambio mas antiguo primero), 3) se recortan las lineas
+de contexto de menor prioridad (las ultimas; las lineas obligatorias «Sin dato» y de ubicacion no se tocan), 4) si aun asi no cabe (la pregunta sola no cabe) no se arma peticion
 valida: notas["pregunta_no_cabe"] = True y el orquestador responde un mensaje fijo SIN llamar al modelo.
 Nunca se recorta el system ni la pregunta.
 La salida cumple el esquema PeticionV2 del contrato 2.2 (schemas/chatbot_contrato_v2.py).
@@ -29,6 +34,9 @@ from services.orquestador.grafica_intencion import PREFIJO_OPCIONES
 from services.orquestador.prompts import VERSION_PROMPT_ACTUAL, cargar_system
 
 MAX_PREGUNTA = 1500
+MAX_INTERCAMBIOS_HISTORIAL = 2
+MAX_TOKENS_HISTORIAL = 400
+TOKENS_MENSAJE_HISTORIAL = 6  # encabezado y cierre de rol de cada mensaje del historial (Llama 3: ~5)
 TOKENS_PLANTILLA = 40  # encabezados de rol, fecha y etiquetas CONTEXTO / PREGUNTA (medido ~35)
 CARACTERES_POR_TOKEN_PROMPT = 2.3  # conservador para TODO el prompt (el contexto de datos conserva 3,0 en contexto.py)
 MARGEN_TOKENS = 64
@@ -47,9 +55,9 @@ def estimar_tokens_prompt(texto: str) -> int:
     return math.ceil(len(texto) / CARACTERES_POR_TOKEN_PROMPT) + 1
 
 
-def sanear_pregunta(texto: str) -> tuple[str, bool]:
-    """-> (pregunta saneada, fue_cortada). Quita caracteres de control, colapsa espacios, neutraliza las
-    lineas que imitan los delimitadores del mensaje (o la linea de opciones de grafica, 7.1) y corta a MAX_PREGUNTA caracteres."""
+def _neutralizar(texto: str) -> str:
+    """Quita caracteres de control, colapsa espacios y neutraliza las lineas que imitan los delimitadores del mensaje
+    (o la linea de opciones de grafica, 7.1). No corta."""
     limpio = "".join(ch for ch in (texto or "") if ch in "\n\t" or not unicodedata.category(ch).startswith("C"))
     lineas = [re.sub(r"[ \t]+", " ", linea).strip() for linea in limpio.split("\n")]
     salida: list[str] = []
@@ -59,7 +67,12 @@ def sanear_pregunta(texto: str) -> tuple[str, bool]:
         if linea.rstrip(":").strip().upper() in _DELIMITADORES or _ETIQUETA_ID.match(linea) or linea.startswith(PREFIJO_OPCIONES):
             linea = "» " + linea
         salida.append(linea)
-    pregunta = "\n".join(salida).strip()
+    return "\n".join(salida).strip()
+
+
+def sanear_pregunta(texto: str) -> tuple[str, bool]:
+    """-> (pregunta saneada, fue_cortada). Neutraliza (_neutralizar) y corta a MAX_PREGUNTA caracteres."""
+    pregunta = _neutralizar(texto)
     cortada = len(pregunta) > MAX_PREGUNTA
     return (pregunta[:MAX_PREGUNTA].rstrip() if cortada else pregunta), cortada
 
@@ -68,19 +81,53 @@ def mensaje_usuario(lineas: list[str], pregunta: str) -> str:
     return "CONTEXTO\n" + "\n".join(lineas or [LINEA_SIN_CONTEXTO]) + "\n\nPREGUNTA DEL USUARIO\n" + pregunta
 
 
-def ensamblar(pregunta: str, contexto: ContextoConstruido, metadatos: dict, system: str | None = None) -> dict:
+def tokens_historial(intercambios: list[dict]) -> int:
+    """Tokens estimados (2,3 car/token mas el rol de cada mensaje) de los intercambios ya saneados."""
+    return sum(
+        estimar_tokens_prompt(i["pregunta"]) + estimar_tokens_prompt(i["respuesta"]) + 2 * TOKENS_MENSAJE_HISTORIAL
+        for i in intercambios
+    )
+
+
+def preparar_historial(historial: list[dict] | None) -> list[dict]:
+    """Los ultimos MAX_INTERCAMBIOS_HISTORIAL intercambios ({"pregunta", "respuesta"}, el mas antiguo primero), saneados y
+    recortados a MAX_TOKENS_HISTORIAL: se descarta el mas antiguo hasta que quepa; un intercambio que solo no cabe sale
+    entero (nunca se corta una respuesta). Un intercambio sin texto tras sanear se ignora."""
+    saneados = []
+    for i in (historial or [])[-MAX_INTERCAMBIOS_HISTORIAL:]:
+        pregunta, _ = sanear_pregunta(i.get("pregunta") or "")
+        respuesta = _neutralizar(i.get("respuesta") or "")
+        if pregunta and respuesta:
+            saneados.append({"pregunta": pregunta, "respuesta": respuesta})
+    while saneados and tokens_historial(saneados) > MAX_TOKENS_HISTORIAL:
+        saneados.pop(0)
+    return saneados
+
+
+def mensajes_historial(intercambios: list[dict]) -> list[dict]:
+    return [
+        {"rol": rol, "contenido": i[campo]}
+        for i in intercambios for rol, campo in (("user", "pregunta"), ("assistant", "respuesta"))
+    ]
+
+
+def ensamblar(
+    pregunta: str, contexto: ContextoConstruido, metadatos: dict, system: str | None = None, historial: list[dict] | None = None
+) -> dict:
     """-> {"peticion": cuerpo PeticionV2, "contexto_compacto": str, "contexto_ids": [...], "notas": {...}}.
 
     `metadatos`: usuario_id y consentimiento_entrenamiento (obligatorios) mas conversacion_id, mensaje_id e
-    intento si se conocen. Se anade version_prompt."""
+    intento si se conocen. Se anade version_prompt. `historial`: intercambios previos de la misma conversacion y usuario
+    (ver el docstring del modulo); None o [] = el mensaje de siempre, byte a byte."""
     system = cargar_system() if system is None else system
     saneada, cortada = sanear_pregunta(pregunta)
     base = TOKENS_PLANTILLA + estimar_tokens_prompt(system)
+    previos = preparar_historial(historial)
 
     def armar(ctx, tope):
         items, lineas, omitidos = ctx.seleccionar(MAX_ELEMENTOS, tope)
         contenido = mensaje_usuario(lineas, saneada)
-        return items, omitidos, contenido, base + estimar_tokens_prompt(contenido)
+        return items, omitidos, contenido, base + estimar_tokens_prompt(contenido) + tokens_historial(previos)
 
     # 1) si no cabe, fuera fragmentos del RAG (el menos relevante primero)
     ctx, tope_contexto = contexto, MAX_TOKENS_CONTEXTO
@@ -90,15 +137,21 @@ def ensamblar(pregunta: str, contexto: ContextoConstruido, metadatos: dict, syst
         quitar -= 1
         ctx = replace(contexto, fragmentos_rag=contexto.fragmentos_rag[:quitar], rag_usados=[])
         items, omitidos, contenido, total = armar(ctx, tope_contexto)
-    # 2) luego las lineas de contexto de menor prioridad (las ultimas); el tope se expresa en tokens de contexto (3,0)
+    # 2) luego el historial (el intercambio mas antiguo primero): los datos del turno actual pesan mas que la conversacion
+    while total > PRESUPUESTO_ENTRADA and previos:
+        previos = previos[1:]
+        total = base + estimar_tokens_prompt(contenido) + tokens_historial(previos)
+    # 3) luego las lineas de contexto de menor prioridad (las ultimas); el tope se expresa en tokens de contexto (3,0)
     while total > PRESUPUESTO_ENTRADA and tope_contexto > 0:
         exceso = (total - PRESUPUESTO_ENTRADA) * CARACTERES_POR_TOKEN_PROMPT / CARACTERES_POR_TOKEN
         tope_contexto = max(0, tope_contexto - max(10, math.ceil(exceso)))
         items, omitidos, contenido, total = armar(ctx, tope_contexto)
-    pregunta_no_cabe = total > PRESUPUESTO_ENTRADA  # 3) ni sin contexto opcional: la pregunta sola no cabe
+    pregunta_no_cabe = total > PRESUPUESTO_ENTRADA  # 4) ni sin contexto opcional: la pregunta sola no cabe
     peticion = {
         "version_contrato": 2,
-        "mensajes": [{"rol": "system", "contenido": system}, {"rol": "user", "contenido": contenido}],
+        "mensajes": [
+            {"rol": "system", "contenido": system}, *mensajes_historial(previos), {"rol": "user", "contenido": contenido},
+        ],
         "contexto": items,
         "metadatos": {**metadatos, "version_prompt": VERSION_PROMPT_ACTUAL},
     }
@@ -110,6 +163,8 @@ def ensamblar(pregunta: str, contexto: ContextoConstruido, metadatos: dict, syst
             "pregunta_cortada": cortada,
             "omitidos": omitidos,
             "rag_fragmentos": list(ctx.rag_usados),
+            "historial_intercambios": len(previos),
+            "historial_tokens": tokens_historial(previos),
             "tokens_estimados": total,
             "dentro_del_presupuesto": not pregunta_no_cabe,
             "pregunta_no_cabe": pregunta_no_cabe,

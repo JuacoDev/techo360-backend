@@ -26,6 +26,7 @@ from services.orquestador import aclaracion as acl
 from services.orquestador.contexto import LINEA_SIN_CONTEXTO, leer_serie, score_con_filas_base
 from services.orquestador.grafica_bloque import procesar_grafica
 from services.orquestador.grafica_intencion import PREFIJO_OPCIONES
+from services.orquestador.herencia import resolver_cadena
 from services.orquestador.orquestador import preparar_consulta
 from services.orquestador.resolutor import cargar_catalogo
 from services.orquestador.sanitizador import sanitizar_texto
@@ -79,11 +80,18 @@ async def _generar(peticion: dict, solicitar, timeout: float):
     return respuesta, None
 
 
-async def responder(pregunta: str, db_datos, metadatos: dict, *, catalogo=None, almacen=None, hoy: date | None = None, **kw) -> dict:
+async def responder(
+    pregunta: str, db_datos, metadatos: dict, *, catalogo=None, almacen=None, hoy: date | None = None, historial=None, **kw
+) -> dict:
     """Entrada del pipeline v2. Antes del orquestador aplica la memoria de aclaraciones (4.13): si la conversacion
     esta esperando la respuesta a «¿A cuál te refieres?», una respuesta corta e inequivoca fija el municipio y la
     pregunta original sigue su flujo; si no, se descarta el estado y la pregunta se procesa normal. El estado vive
-    en Redis por usuario y conversacion (aclaracion.py); si Redis falla todo sigue como antes de la 4.13."""
+    en Redis por usuario y conversacion (aclaracion.py); si Redis falla todo sigue como antes de la 4.13.
+
+    `historial` (7.1b / H1): intercambios previos [{"pregunta", "respuesta"}, el mas antiguo primero] de ESTA conversacion
+    y ESTE usuario (historial.leer_intercambios, ya con el aislamiento). Los ultimos 2 viajan al modelo y de todos sale la
+    resolucion del turno anterior, de la que un seguimiento hereda municipio, variable y año. Con una aclaracion pendiente
+    no se hereda; si la pregunta es la respuesta que la resuelve, la pregunta original ya esta en el historial y no se repite."""
     usuario_id, conversacion_id = metadatos.get("usuario_id"), metadatos.get("conversacion_id")
     almacen = almacen or acl.almacen_por_defecto()
     catalogo = catalogo or cargar_catalogo(db_datos)
@@ -105,8 +113,16 @@ async def responder(pregunta: str, db_datos, metadatos: dict, *, catalogo=None, 
             return _aclaracion(acl.texto_homonimo(opciones), "homonimo")
         else:  # pregunta nueva: el estado se descarta
             await asyncio.to_thread(almacen.borrar, usuario_id, conversacion_id)
+    historial = list(historial or [])
+    previa = None
+    if historial and estado is None:
+        previa = await asyncio.to_thread(resolver_cadena, [h["pregunta"] for h in historial], catalogo, hoy or date.today())
+    if consumido is not None:
+        historial = historial[:-1]  # el ultimo intercambio es la propia aclaracion: la pregunta original ya viaja como PREGUNTA
     try:
-        resultado = await _responder(pregunta, db_datos, metadatos, hoy=hoy, catalogo=catalogo, fijados=fijados, **kw)
+        resultado = await _responder(
+            pregunta, db_datos, metadatos, hoy=hoy, catalogo=catalogo, fijados=fijados, historial=historial, previa=previa, **kw
+        )
     except BaseException:
         if consumido is not None:  # el RPC fallo o se cancelo: el reintento debe poder resolver la misma respuesta
             await asyncio.shield(asyncio.to_thread(almacen.guardar, usuario_id, conversacion_id, consumido))
@@ -147,6 +163,8 @@ async def _responder(
     score_fn=None,
     score_con_filas=None,
     universo_fn=None,
+    historial=None,
+    previa=None,
     **inyecciones,
 ) -> dict:
     solicitar = solicitar or chatbot_rpc_client.solicitar_chatbot
@@ -166,14 +184,15 @@ async def _responder(
     catalogo = catalogo or cargar_catalogo(db_datos)
     preparada = await preparar_consulta(
         pregunta, db_datos, metadatos, hoy=hoy, catalogo=catalogo,
-        leer_serie_fn=leer_serie_fn, completar=completar, score_fn=score_fn, fijados=fijados, **inyecciones,
+        leer_serie_fn=leer_serie_fn, completar=completar, score_fn=score_fn, fijados=fijados,
+        historial=historial, previa=previa, **inyecciones,
     )
     if preparada["accion"] == "aclarar":
         return _aclaracion(preparada["texto"], preparada["tipo"], preparada.get("opciones"))
     peticion = preparada["peticion"]
     contexto_compacto, contexto_ids = preparada["contexto_compacto"], preparada["contexto_ids"]
     items = peticion["contexto"]
-    bloque_contexto = peticion["mensajes"][1]["contenido"].split("\n\nPREGUNTA DEL USUARIO\n")[0]
+    bloque_contexto = peticion["mensajes"][-1]["contenido"].split("\n\nPREGUNTA DEL USUARIO\n")[0]
     lineas = [l for l in bloque_contexto.split("\n")[1:] if l and l != LINEA_SIN_CONTEXTO]
     codigos = set(catalogo.por_codigo)
     version_prompt = peticion["metadatos"]["version_prompt"]
