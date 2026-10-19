@@ -12,6 +12,13 @@ final "Se omitieron N datos por el límite de contexto.".
 Linea de ubicacion: si el resolutor devolvio municipios sin ambiguedad y NINGUNA variable, se antepone por municipio
 "Ubicación: <Municipio> pertenece al departamento de <Departamento>." (sin [cN], sin id, sin numeros). Es
 obligatoria como las lineas "Sin dato": nunca se recorta y cuenta para el presupuesto.
+
+Grafica (7.1 / W1): con intencion de grafica se agrega al final de las lineas de datos la linea de opciones
+(grafica_intencion.linea_opciones; obligatoria, sin [cN]). Si ademas la grafica es de evolucion y la pregunta no trae
+años, cada variable-municipio aporta su SERIE (todos los años con dato, reales y proyeccion etiquetados) en vez del
+ultimo año real, con cupo de MAX_ELEMENTOS entre las series. Si no caben todos, entran primero los años reales (el mas
+reciente primero) y despues las proyecciones mas cercanas; lo que se recorte por presupuesto de tokens sale en ese
+mismo orden inverso. Siempre se muestran en orden cronologico.
 """
 import asyncio
 import json
@@ -32,6 +39,7 @@ from services.orquestador.alias import (
     V_SCORE,
 )
 from services.orquestador.fuentes import fuente_de_origen
+from services.orquestador.grafica_intencion import SIN_INTENCION, linea_opciones
 from services.score_privacion import normalizar_minmax, calcular_score_privacion
 
 MAX_ELEMENTOS = 20
@@ -82,6 +90,11 @@ class Candidato:
     item: dict | None  # elemento del contrato 2.2 (sin id), None en las lineas "Sin dato"
     texto: str  # linea sin el "[cN] " inicial
     sin_dato: bool = False
+    opciones: bool = False  # linea de opciones de grafica (7.1): obligatoria y sin [cN], como «Sin dato»
+
+    @property
+    def es_obligatoria(self) -> bool:
+        return self.sin_dato or self.opciones
 
 
 @dataclass
@@ -93,8 +106,8 @@ class ContextoConstruido:
 
     def seleccionar(self, max_elementos: int = MAX_ELEMENTOS, max_tokens: int = MAX_TOKENS_CONTEXTO):
         """-> (items con id c1..cn, lineas de texto, omitidos). Las lineas Sin dato siempre entran."""
-        obligatorias = [c for c in self.candidatos if c.sin_dato]
-        opcionales = sorted((c for c in self.candidatos if not c.sin_dato), key=lambda c: (c.prioridad, c.orden))
+        obligatorias = [c for c in self.candidatos if c.es_obligatoria]
+        opcionales = sorted((c for c in self.candidatos if not c.es_obligatoria), key=lambda c: (c.prioridad, c.orden))
         presupuesto = max_tokens - sum(estimar_tokens(c.texto) for c in obligatorias)
         incluidos: list[Candidato] = []
         for c in opcionales:
@@ -114,7 +127,7 @@ class ContextoConstruido:
         items, lineas = [], []
         n = 0
         for c in elegidos:
-            if c.sin_dato:
+            if c.es_obligatoria:
                 lineas.append(c.texto)
                 continue
             n += 1
@@ -212,6 +225,47 @@ async def _score(municipio, anio, db, leer_serie_fn, score_fn):
     return "sin_hueco", None
 
 
+async def score_con_filas_base(municipio, anio, db, leer_serie_fn):
+    """Score cuando los tres componentes ya existen en BD: limites fijos de 2024, igual que el proyectado.
+    -> item del contrato 2.2 o None si no se puede calcular."""
+    filas = {}
+    for v in (V_ACUEDUCTO, V_ALCANTARILLADO, V_DEFICIT_CUANTITATIVO):
+        serie = await leer_serie_fn(municipio["divipola"], v)
+        fila = next((f for f in serie if f["anio"] == anio and f["valor"] is not None), None)
+        if fila is None:
+            return None
+        filas[v] = fila
+    limites = await pservicio._obtener_limites_base_cacheados(db)
+    normalizados = {v: {"score_normalizado": normalizar_minmax(f["valor"], *limites.get(v, (None, None)))}
+                    for v, f in filas.items()}
+    score = calcular_score_privacion(normalizados)
+    if score is None:
+        return None
+    real = all(not es_proyeccion(f["origen"]) for f in filas.values())
+    fiab = min(100.0 if not es_proyeccion(f["origen"]) else fiabilidad_de_origen(f["origen"], f.get("intervalo"))
+               for f in filas.values())
+    origen = pservicio.ORIGEN_SCORE_REAL if real else pservicio.ORIGEN_SCORE_PROYECTADO
+    return _item(V_SCORE, municipio, anio, score, origen, real, None if real else fiab)
+
+
+def _anios_de_serie(es_real_por_anio: dict[int, bool], cupo: int) -> list[tuple[int, int]]:
+    """-> [(año, prioridad)] en orden cronologico. Prioridad 0 = el que mas importa: primero los años reales (el mas
+    reciente primero) y luego las proyecciones, de la mas cercana a la mas lejana; solo entran `cupo`."""
+    reales = sorted((a for a, real in es_real_por_anio.items() if real), reverse=True)
+    proyectados = sorted(a for a, real in es_real_por_anio.items() if not real)
+    return sorted((a, rango) for rango, a in enumerate((reales + proyectados)[:cupo]))
+
+
+async def _anios_de_score(municipio, leer_serie_fn) -> dict[int, bool]:
+    """Años en que existen los tres componentes del Score para el municipio (real si los tres son reales)."""
+    por_variable = []
+    for v in (V_ACUEDUCTO, V_ALCANTARILLADO, V_DEFICIT_CUANTITATIVO):
+        serie = await leer_serie_fn(municipio["divipola"], v)
+        por_variable.append({f["anio"]: not es_proyeccion(f["origen"]) for f in serie if f["valor"] is not None})
+    comunes = set.intersection(*(set(d) for d in por_variable))
+    return {a: all(d[a] for d in por_variable) for a in comunes}
+
+
 async def construir_contexto(
     resolucion,
     db,
@@ -221,6 +275,7 @@ async def construir_contexto(
     completar=None,
     score_fn=None,
     score_con_filas=None,
+    intencion_grafica=SIN_INTENCION,
 ) -> ContextoConstruido:
     leer_serie_fn = leer_serie_fn or (lambda codigo, variable: asyncio.to_thread(leer_serie, db, codigo, variable))
     completar = completar or pservicio.completar_puntos
@@ -229,29 +284,14 @@ async def construir_contexto(
             return await pservicio.calcular_score_punto(codigo, anio, db)
     if score_con_filas is None:
         async def score_con_filas(municipio, anio):
-            """Score cuando los tres componentes ya existen en BD: limites fijos de 2024, igual que el proyectado."""
-            filas = {}
-            for v in (V_ACUEDUCTO, V_ALCANTARILLADO, V_DEFICIT_CUANTITATIVO):
-                serie = await leer_serie_fn(municipio["divipola"], v)
-                fila = next((f for f in serie if f["anio"] == anio and f["valor"] is not None), None)
-                if fila is None:
-                    return None
-                filas[v] = fila
-            limites = await pservicio._obtener_limites_base_cacheados(db)
-            normalizados = {v: {"score_normalizado": normalizar_minmax(f["valor"], *limites.get(v, (None, None)))}
-                            for v, f in filas.items()}
-            score = calcular_score_privacion(normalizados)
-            if score is None:
-                return None
-            real = all(not es_proyeccion(f["origen"]) for f in filas.values())
-            fiab = min(100.0 if not es_proyeccion(f["origen"]) else fiabilidad_de_origen(f["origen"], f.get("intervalo"))
-                       for f in filas.values())
-            origen = pservicio.ORIGEN_SCORE_REAL if real else pservicio.ORIGEN_SCORE_PROYECTADO
-            return _item(V_SCORE, municipio, anio, score, origen, real, None if real else fiab)
+            return await score_con_filas_base(municipio, anio, db, leer_serie_fn)
 
     contexto = ContextoConstruido()
     orden = 0
     implicito = bool(resolucion.anio_implicito)
+    serie_completa = bool(intencion_grafica.activa and intencion_grafica.evolucion and implicito)
+    n_series = len(resolucion.municipios) * len(resolucion.variables)
+    cupo = max(2, MAX_ELEMENTOS // n_series) if n_series else 0
     pendientes: list[tuple[int, dict, str, int]] = []  # (orden, municipio, variable, año) a completar
 
     if resolucion.municipios and not resolucion.variables:
@@ -262,12 +302,17 @@ async def construir_contexto(
     for municipio in resolucion.municipios:
         for variable in resolucion.variables:
             if variable == V_SCORE:
-                anios = list(resolucion.anios) if not implicito else [pservicio.ANIO_BASE_SCORE]
-                for anio in anios:
+                anios = [(a, 0) for a in resolucion.anios] if not implicito else [(pservicio.ANIO_BASE_SCORE, 0)]
+                en_serie = False
+                if serie_completa:
+                    candidatos_serie = _anios_de_serie(await _anios_de_score(municipio, leer_serie_fn), cupo)
+                    if candidatos_serie:
+                        anios, en_serie = candidatos_serie, True
+                for anio, rango in anios:
                     orden += 1
                     estado, dato = await _score(municipio, anio, db, leer_serie_fn, score_fn)
                     if estado == "ok":
-                        contexto.candidatos.append(Candidato(0, orden, dato, linea_dato(variable, municipio, dato, implicito)))
+                        contexto.candidatos.append(Candidato(rango, orden, dato, linea_dato(variable, municipio, dato, implicito and not en_serie)))
                     elif estado == "sin_dato":
                         contexto.candidatos.append(Candidato(0, orden, None, linea_sin_dato(variable, municipio, anio, dato), True))
                     else:  # los tres componentes existen: score con filas reales/proyectadas
@@ -275,7 +320,7 @@ async def construir_contexto(
                         if item is None:
                             contexto.candidatos.append(Candidato(0, orden, None, linea_sin_dato(variable, municipio, anio, "score_no_calculable"), True))
                         else:
-                            contexto.candidatos.append(Candidato(0, orden, item, linea_dato(variable, municipio, item, implicito)))
+                            contexto.candidatos.append(Candidato(rango, orden, item, linea_dato(variable, municipio, item, implicito and not en_serie)))
                 continue
             serie = await leer_serie_fn(municipio["divipola"], variable)
             por_anio = {f["anio"]: f for f in serie if f["valor"] is not None}
@@ -285,14 +330,17 @@ async def construir_contexto(
                     orden += 1
                     contexto.candidatos.append(Candidato(0, orden, None, linea_sin_dato(variable, municipio, None, "sin_dato_real"), True))
                     continue
-                anios = [max(reales)]
+                anios = [(max(reales), 0)]
+                if serie_completa:  # grafica de evolucion sin años: toda la serie, no solo el ultimo año real
+                    anios = _anios_de_serie({a: not es_proyeccion(f["origen"]) for a, f in por_anio.items()}, cupo)
             else:
-                anios = list(resolucion.anios)
-            for anio in anios:
+                anios = [(a, 0) for a in resolucion.anios]
+            en_serie = serie_completa and implicito
+            for anio, rango in anios:
                 orden += 1
                 if anio in por_anio:
                     item = _item_desde_fila(variable, municipio, por_anio[anio])
-                    contexto.candidatos.append(Candidato(0, orden, item, linea_dato(variable, municipio, item, implicito)))
+                    contexto.candidatos.append(Candidato(rango, orden, item, linea_dato(variable, municipio, item, implicito and not en_serie)))
                 else:
                     pendientes.append((orden, municipio, variable, anio))
 
@@ -305,6 +353,9 @@ async def construir_contexto(
                 contexto.candidatos.append(Candidato(0, ord_, item, linea_dato(variable, municipio, item, implicito)))
             else:
                 contexto.candidatos.append(Candidato(0, ord_, None, linea_sin_dato(variable, municipio, anio, p["motivo"]), True))
+    if intencion_grafica.activa and resolucion.municipios:
+        orden += 1  # al final de las lineas de datos: lo ultimo que lee el modelo antes de la pregunta
+        contexto.candidatos.append(Candidato(0, orden, None, linea_opciones(resolucion.municipios), opciones=True))
     contexto.candidatos.sort(key=lambda c: c.orden)
     return contexto
 

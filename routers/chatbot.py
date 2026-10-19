@@ -23,6 +23,7 @@ from schemas.chatbot import (
     MensajeResponse,
 )
 from services import chatbot_estados, chatbot_service
+from services.orquestador.persistencia import adjuntar_grafica, adjuntar_graficas_guardadas
 from services.chatbot_rpc_client import ChatbotTimeoutError, avisar_cancelacion, solicitar_chatbot
 
 router = APIRouter(
@@ -137,12 +138,15 @@ def listar_mensajes(
     # esperando (el RPC tiene tope de 200 s): pasa a 'error' para que se pueda resolver.
     chatbot_estados.barrer_colgados(db)
 
-    return (
+    mensajes = (
         db.query(Mensaje)
         .filter(Mensaje.conversacion_id == conversacion.id)
         .order_by(Mensaje.fecha.asc(), Mensaje.id.asc())
         .all()
     )
+    if settings.chatbot_orquestador_activo:  # mensajes.grafica existe desde la migracion 0004 (solo el camino v2 la usa)
+        adjuntar_graficas_guardadas(db, mensajes)
+    return mensajes
 
 
 @router.post(
@@ -226,6 +230,7 @@ async def enviar_mensaje(
     # Con el orquestador apagado no hay "_v2": misma llamada de siempre.
     extra = {"metadatos": respuesta["_v2"]} if respuesta.get("_v2") is not None else {}
     mensaje_asistente = chatbot_service.agregar_mensaje(db, conversacion.id, "asistente", respuesta["response"], **extra)
+    adjuntar_grafica(mensaje_asistente, respuesta.get("_v2"))
 
     return IntercambioResponse(mensaje_usuario=mensaje_usuario, mensaje_asistente=mensaje_asistente)
 
@@ -355,6 +360,7 @@ async def _procesar(
         )
     if cerrado is None:
         return _descartado(db, mensaje_id)  # cancelado, barrido o intento posterior: la respuesta se descarta
+    adjuntar_grafica(cerrado[1], respuesta.get("_v2"))
     return IntercambioResponse(mensaje_usuario=cerrado[0], mensaje_asistente=cerrado[1])
 
 

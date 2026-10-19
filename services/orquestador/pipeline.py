@@ -23,8 +23,9 @@ from schemas.chatbot_contrato_v2 import ErrorContrato, validar_respuesta
 from services import chatbot_rpc_client
 from services import proyeccion_service as pservicio
 from services.orquestador import aclaracion as acl
-from services.orquestador.contexto import LINEA_SIN_CONTEXTO, leer_serie
+from services.orquestador.contexto import LINEA_SIN_CONTEXTO, leer_serie, score_con_filas_base
 from services.orquestador.grafica_bloque import procesar_grafica
+from services.orquestador.grafica_intencion import PREFIJO_OPCIONES
 from services.orquestador.orquestador import preparar_consulta
 from services.orquestador.resolutor import cargar_catalogo
 from services.orquestador.sanitizador import sanitizar_texto
@@ -39,8 +40,9 @@ TEXTO_SIN_DATOS = "No pude redactar una explicación con cifras verificadas y no
 
 
 def respuesta_determinista(lineas: list[str]) -> str:
-    """Plantilla armada SOLO con las lineas del contexto (sin los ids [cN])."""
-    limpias = [l.split("] ", 1)[1] if re.match(r"\[[cd]\d+\] ", l) else l for l in lineas]
+    """Plantilla armada SOLO con las lineas del contexto (sin los ids [cN]). La linea de opciones de grafica (7.1) es
+    una instruccion para el modelo, no un dato: no se entrega al usuario."""
+    limpias = [l.split("] ", 1)[1] if re.match(r"\[[cd]\d+\] ", l) else l for l in lineas if not l.startswith(PREFIJO_OPCIONES)]
     if not limpias:
         return TEXTO_SIN_DATOS
     return NOTA_FALLBACK + "\n" + "\n".join(f"- {l}" for l in limpias)
@@ -143,6 +145,8 @@ async def _responder(
     leer_serie_fn=None,
     completar=None,
     score_fn=None,
+    score_con_filas=None,
+    universo_fn=None,
     **inyecciones,
 ) -> dict:
     solicitar = solicitar or chatbot_rpc_client.solicitar_chatbot
@@ -151,6 +155,13 @@ async def _responder(
     if score_fn is None:
         async def score_fn(codigo, anio):
             return await pservicio.calcular_score_punto(codigo, anio, db_datos)
+    if score_con_filas is None:
+        async def score_con_filas(municipio, anio):
+            return await score_con_filas_base(municipio, anio, db_datos, leer_serie_fn)
+    if universo_fn is None:
+        async def universo_fn(variables, anio_inicio, anio_fin):
+            from services.reportes_datos_graficas import calcular_nacional  # import tardio: arrastra el modulo de reportes
+            return await asyncio.to_thread(calcular_nacional, db_datos, variables, anio_inicio, anio_fin)
     inicio = reloj()
     catalogo = catalogo or cargar_catalogo(db_datos)
     preparada = await preparar_consulta(
@@ -168,8 +179,11 @@ async def _responder(
     version_prompt = peticion["metadatos"]["version_prompt"]
 
     async def revisar(texto_modelo: str):
+        # 7.1: el bloque sale ANTES del validador de cifras (sus años y codigos no son cifras del texto); la linea de
+        # opciones de grafica esta en `lineas`, asi que cuenta como contexto para el validador.
         sin_bloque, grafica = await procesar_grafica(
-            texto_modelo, codigos, leer_serie_fn=leer_serie_fn, completar=completar, score_fn=score_fn
+            texto_modelo, codigos, leer_serie_fn=leer_serie_fn, completar=completar, score_fn=score_fn,
+            municipios=catalogo.por_codigo, score_con_filas=score_con_filas, universo_fn=universo_fn,
         )
         return sin_bloque, grafica, validar_cifras(sin_bloque, lineas, items, pregunta)
 
