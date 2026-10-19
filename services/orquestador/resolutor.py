@@ -273,8 +273,17 @@ def _listar(entradas: list[Municipio]) -> str:
     return ", ".join(f"{m.nombre} ({m.departamento})" for m in entradas)
 
 
-def resolver(texto: str, cat: Catalogo, hoy: date | None = None) -> Resolucion:
+def _opciones(cat: Catalogo, entradas: list[Municipio]) -> list[dict]:
+    """Opciones ofrecidas en una aclaracion (para la memoria de 4.13); en el mismo orden en que se listan."""
+    return [{"divipola": m.divipola, "nombre": m.nombre, "departamento": cat.nombre_departamento[m.cod_departamento]}
+            for m in entradas]
+
+
+def resolver(texto: str, cat: Catalogo, hoy: date | None = None, fijados: dict[str, str] | None = None) -> Resolucion:
+    """`fijados` (4.13): {nombre normalizado: DIVIPOLA} elegidos por el usuario tras una aclaracion; ese nombre se
+    resuelve a ese codigo sin volver a aclarar ni validar el departamento."""
     hoy = hoy or date.today()
+    fijados = fijados or {}
     palabras = tokenizar(texto)
     tokens = [p for p, _ in palabras]
     spans = _spans(tokens, cat)
@@ -312,6 +321,10 @@ def resolver(texto: str, cat: Catalogo, hoy: date | None = None) -> Resolucion:
     for s in muns:
         entradas = cat.por_nombre[s.clave]
         nombre = entradas[0].nombre
+        fijado = cat.por_codigo.get(fijados.get(s.clave, ""))
+        if fijado is not None and fijado in entradas:
+            entradas = [fijado]
+            s.departamento = None
         if s.departamento is not None:
             elegidas = [m for m in entradas if m.cod_departamento == s.departamento]
             if not elegidas:
@@ -319,7 +332,8 @@ def resolver(texto: str, cat: Catalogo, hoy: date | None = None) -> Resolucion:
                 pedido = cat.nombre_departamento[s.departamento]
                 opciones = " o ".join(f"{m.nombre} ({cat.nombre_departamento[m.cod_departamento]})" for m in entradas)
                 res.aclaracion = {"tipo": "inconsistente",
-                                  "texto": f"{nombre} pertenece a {reales}, no a {pedido}. ¿Quieres consultar {opciones}?"}
+                                  "texto": f"{nombre} pertenece a {reales}, no a {pedido}. ¿Quieres consultar {opciones}?",
+                                  "opciones": _opciones(cat, entradas)}
                 res.municipios = []
                 return res
             entradas = elegidas
@@ -327,7 +341,8 @@ def resolver(texto: str, cat: Catalogo, hoy: date | None = None) -> Resolucion:
             if not (res.variables or res.anios or intencion_geografica):
                 continue  # 4.1b: sin intencion de datos un homonimo no pide aclaracion; simplemente no se resuelve
             res.aclaracion = {"tipo": "homonimo",
-                              "texto": f"Hay varios municipios llamados {nombre}: {_listar(entradas)}. ¿A cuál te refieres?"}
+                              "texto": f"Hay varios municipios llamados {nombre}: {_listar(entradas)}. ¿A cuál te refieres?",
+                              "opciones": _opciones(cat, entradas)}
             res.municipios = []
             return res
         m = entradas[0]

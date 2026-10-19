@@ -13,10 +13,10 @@ from services.orquestador.ensamblador import ensamblar
 from services.orquestador.resolutor import cargar_catalogo, resolver
 
 
-async def preparar_consulta(pregunta: str, db, metadatos: dict, *, hoy: date | None = None, catalogo=None, **inyecciones) -> dict:
+async def preparar_consulta(pregunta: str, db, metadatos: dict, *, hoy: date | None = None, catalogo=None, fijados=None, **inyecciones) -> dict:
     hoy = hoy or date.today()
     catalogo = catalogo or cargar_catalogo(db)
-    resolucion = resolver(pregunta, catalogo, hoy)
+    resolucion = resolver(pregunta, catalogo, hoy, fijados)
     if resolucion.aclaracion is not None:
         return {"accion": "aclarar", **resolucion.aclaracion}
     contexto = await construir_contexto(resolucion, db, hoy_anio=hoy.year, **inyecciones)
