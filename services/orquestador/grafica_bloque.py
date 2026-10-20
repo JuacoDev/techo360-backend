@@ -1,23 +1,36 @@
 """4.6 Extractor del bloque de grafica (fase4-especificacion-2; contrato fase2-3).
 
 procesar_grafica(texto, ...) -> (texto_sin_bloques, resultado | None)
-resultado = {"spec": dict | None, "valida": bool, "motivo": str | None}
+resultado = {"spec": dict | None, "valida": bool, "motivo": str | None, "payload": dict | None}
 
 Se extrae el PRIMER bloque ```grafica (los demas se ignoran), se valida la estructura y la combinacion
 (schemas/chatbot_grafica.py + validar_combinacion), que las zonas existan en zonas_municipio y que haya
 datos (al menos 2 puntos por serie para `lineas`; usa mapcalordb y completar_puntos). SIEMPRE se quita el bloque del
-texto entregado. En 0.4.0 la especificacion NO se entrega al frontend (eso es 7.6): solo se valida y se guarda en
-mensajes.grafica. Bloque sin cierre o JSON roto: se descarta con su motivo.
+texto entregado. Bloque sin cierre o JSON roto: se descarta con su motivo.
+
+7.1 / W1: una especificacion valida se completa con los DATOS (grafica_payload.construir_payload: valores reales y
+proyeccion etiquetados, mas el universo nacional si el tipo lo necesita). Ese `payload` se guarda en mensajes.grafica y es
+lo unico que se entrega al frontend (ver claude/fase7-6-payload.md). Si el payload no se puede armar, la grafica no se
+entrega (valida=False con el motivo) y el texto sigue sin ella. Una lista de `anios` vacia ya no pasa: sin año no hay
+datos que dibujar (el esquema 2.4-B la admite para los tipos distintos de `lineas`).
 """
 import re
 
 from schemas.chatbot_grafica import ErrorGrafica, extraer_bloque, validar_bloque_json
 from services import proyeccion_service as pservicio
 from services.orquestador.alias import V_SCORE
+from services.orquestador.grafica_payload import ErrorPayload, construir_payload
 
 _BLOQUE = re.compile(r"```grafica[ \t]*\r?\n.*?(?:\r?\n?```|\Z)", re.DOTALL)
 MIN_PUNTOS_LINEAS = 2
 MIN_PUNTOS_OTROS = 1
+
+
+class _SinNombre:
+    """Municipio sin catalogo (pruebas): el nombre es el codigo."""
+
+    def __init__(self, codigo: str):
+        self.divipola, self.nombre, self.departamento = codigo, codigo, ""
 
 
 def quitar_bloques(texto: str) -> str:
@@ -44,7 +57,11 @@ async def _puntos_disponibles(variable, zona, anios, leer_serie_fn, completar, s
     return disponibles
 
 
-async def procesar_grafica(texto: str, codigos_validos: set[str], *, leer_serie_fn, completar, score_fn):
+async def procesar_grafica(
+    texto: str, codigos_validos: set[str], *, leer_serie_fn, completar, score_fn,
+    municipios=None, score_con_filas=None, universo_fn=None,
+):
+    """`municipios`: codigo -> Municipio del catalogo (nombres para el payload; sin el, el nombre es el codigo)."""
     limpio = quitar_bloques(texto)
     if "```grafica" not in (texto or ""):
         return limpio, None
@@ -59,11 +76,22 @@ async def procesar_grafica(texto: str, codigos_validos: set[str], *, leer_serie_
         return limpio, {"spec": spec_dict, "valida": False, "motivo": f"zona_inexistente: {len(inexistentes)} codigo(s)"}
     minimo = MIN_PUNTOS_LINEAS if spec.tipo == "lineas" else MIN_PUNTOS_OTROS
     anios = list(spec.anios)
-    if anios:
-        for variable in spec.variables:
-            for zona in spec.zonas:
-                n = await _puntos_disponibles(variable, zona, anios, leer_serie_fn, completar, score_fn)
-                if n < minimo:
-                    return limpio, {"spec": spec_dict, "valida": False,
-                                    "motivo": f"datos_insuficientes: {variable} tiene {n} punto(s), se necesitan {minimo}"}
-    return limpio, {"spec": spec_dict, "valida": True, "motivo": None}
+    if not anios:
+        return limpio, {"spec": spec_dict, "valida": False, "motivo": "anios_vacio: la grafica necesita al menos un año"}
+    for variable in spec.variables:
+        for zona in spec.zonas:
+            n = await _puntos_disponibles(variable, zona, anios, leer_serie_fn, completar, score_fn)
+            if n < minimo:
+                return limpio, {"spec": spec_dict, "valida": False,
+                                "motivo": f"datos_insuficientes: {variable} tiene {n} punto(s), se necesitan {minimo}"}
+    try:
+        payload = await construir_payload(
+            spec_dict, municipios if municipios is not None else {z: _SinNombre(z) for z in spec.zonas},
+            leer_serie_fn=leer_serie_fn, completar=completar, score_fn=score_fn, score_con_filas=score_con_filas,
+            universo_fn=universo_fn,
+        )
+    except ErrorPayload as error:
+        return limpio, {"spec": spec_dict, "valida": False, "motivo": error.motivo[:300]}
+    except Exception as error:  # noqa: BLE001 -- una falla de lectura no debe tumbar la respuesta: sale sin grafica
+        return limpio, {"spec": spec_dict, "valida": False, "motivo": f"payload_error: {type(error).__name__}"}
+    return limpio, {"spec": spec_dict, "valida": True, "motivo": None, "payload": payload}

@@ -52,6 +52,9 @@ class MensajeResponse(BaseModel):
     # (backend anterior a la migracion 0002) siga siendo valido.
     estado: str = "respondido"
     error_detalle: str | None = None
+    # 7.1: payload de la grafica que acompana la respuesta del asistente (especificacion + datos resueltos), ver
+    # claude/fase7-6-payload.md. None en todo lo demas; no es una columna de `mensajes` sino la lectura de grafica.
+    grafica: dict | None = None
 
 
 class EnviarMensajeRequest(BaseModel):

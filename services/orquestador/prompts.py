@@ -9,7 +9,9 @@ import hashlib
 import re
 from pathlib import Path
 
-VERSION_PROMPT_ACTUAL = "sp-0.4.0-1"
+from core.config import settings
+
+VERSION_PROMPT_ACTUAL = settings.chatbot_system_version
 DIRECTORIO_PROMPTS = Path(__file__).resolve().parents[2] / "prompts"
 _FILA = re.compile(r"^\|\s*(sp-[\w.\-]+)\s*\|\s*([^|\s]+)\s*\|\s*([0-9a-f]{64})\s*\|", re.MULTILINE)
 
@@ -29,7 +31,8 @@ def sha256_de(version: str, directorio: Path | None = None) -> str:
     return hashlib.sha256((directorio / f"{version}.txt").read_bytes()).hexdigest()
 
 
-def cargar_system(version: str = VERSION_PROMPT_ACTUAL, directorio: Path | None = None) -> str:
+def cargar_system(version: str | None = None, directorio: Path | None = None) -> str:
+    version = VERSION_PROMPT_ACTUAL if version is None else version
     directorio = directorio or DIRECTORIO_PROMPTS
     indice = leer_indice(directorio)
     if version not in indice:

@@ -123,6 +123,15 @@ class Settings(BaseSettings):
     # falla, la respuesta sigue sin fragmentos. Reversa: apagarlo y recrear el backend.
     chatbot_rag_activo: bool = False
 
+    # 7.1b / H1 (historial multi-turno): con el orquestador activo, el turno actual recibe los ultimos 2 intercambios de la
+    # MISMA conversacion y usuario (sin el CONTEXTO de turnos previos, <= 400 tokens) y el resolutor hereda municipio,
+    # variable y año del turno anterior (services/orquestador/historial.py y herencia.py). False (por defecto) = sin
+    # historial ni herencia: cada pregunta se responde sola, como hasta 0.4.0. Activarlo solo con el modelo 0.4.1 (el
+    # system prompt sp-0.4.1-1 trae la regla 10 sobre los mensajes previos). Reversa: apagarlo y recrear el backend.
+    chatbot_historial_activo: bool = False
+
+    chatbot_system_version: str = "sp-0.4.0-1"
+
     # 6.7b: tope de tokens del prompt. Ollama, si el prompt no cabe en num_ctx, desplaza el contexto y descarta el
     # system a mitad de la generacion SIN error. Mismos valores que el Modelfile (num_ctx 3072) y que el cliente del
     # chatbot (num_predict 400): el presupuesto de entrada es OLLAMA_NUM_CTX - OLLAMA_NUM_PREDICT - 64.
@@ -152,6 +161,14 @@ class Settings(BaseSettings):
     @classmethod
     def _otp_ip_daily_max_valido(cls, valor):
         return entero_positivo_o_defecto(valor, OTP_IP_DAILY_MAX_DEFECTO, OTP_IP_DAILY_MAX_MAXIMO)
+
+    @field_validator("chatbot_system_version")
+    @classmethod
+    def _chatbot_system_version_valida(cls, valor):
+        admitidas = {"sp-0.4.0-1", "sp-0.4.1-1"}
+        if valor not in admitidas:
+            raise ValueError("CHATBOT_SYSTEM_VERSION debe ser sp-0.4.0-1 o sp-0.4.1-1")
+        return valor
 
     # JWT
     jwt_secret_key: str

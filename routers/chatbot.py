@@ -1,4 +1,5 @@
 import asyncio
+import logging
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Response
 from fastapi.responses import JSONResponse
@@ -23,7 +24,11 @@ from schemas.chatbot import (
     MensajeResponse,
 )
 from services import chatbot_estados, chatbot_service
+from services.orquestador.historial import leer_intercambios
+from services.orquestador.persistencia import adjuntar_grafica, adjuntar_graficas_guardadas
 from services.chatbot_rpc_client import ChatbotTimeoutError, avisar_cancelacion, solicitar_chatbot
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(
     prefix="/chatbot",
@@ -137,12 +142,15 @@ def listar_mensajes(
     # esperando (el RPC tiene tope de 200 s): pasa a 'error' para que se pueda resolver.
     chatbot_estados.barrer_colgados(db)
 
-    return (
+    mensajes = (
         db.query(Mensaje)
         .filter(Mensaje.conversacion_id == conversacion.id)
         .order_by(Mensaje.fecha.asc(), Mensaje.id.asc())
         .all()
     )
+    if settings.chatbot_orquestador_activo:  # mensajes.grafica existe desde la migracion 0004 (solo el camino v2 la usa)
+        adjuntar_graficas_guardadas(db, mensajes)
+    return mensajes
 
 
 @router.post(
@@ -196,6 +204,7 @@ async def enviar_mensaje(
         return await _enviar_con_estados(db, db_usuarios, conversacion, datos.contenido, current_user)
 
     mensaje_usuario = chatbot_service.agregar_mensaje(db, conversacion.id, "usuario", datos.contenido)
+    historial = _historial(db, conversacion.id, current_user.id, mensaje_usuario.id)
 
     try:
         respuesta = await _pedir_respuesta(
@@ -207,6 +216,7 @@ async def enviar_mensaje(
             },
             db_usuarios,
             datos.contenido,
+            historial=historial,
         )
     except ChatbotTimeoutError as error:
         raise HTTPException(status_code=504, detail=str(error)) from error
@@ -226,11 +236,26 @@ async def enviar_mensaje(
     # Con el orquestador apagado no hay "_v2": misma llamada de siempre.
     extra = {"metadatos": respuesta["_v2"]} if respuesta.get("_v2") is not None else {}
     mensaje_asistente = chatbot_service.agregar_mensaje(db, conversacion.id, "asistente", respuesta["response"], **extra)
+    adjuntar_grafica(mensaje_asistente, respuesta.get("_v2"))
 
     return IntercambioResponse(mensaje_usuario=mensaje_usuario, mensaje_asistente=mensaje_asistente)
 
 
-async def _pedir_respuesta(payload: dict, db_datos: Session, contenido: str) -> dict:
+def _historial(db: Session, conversacion_id: int, usuario_id: int, mensaje_id: int) -> list[dict]:
+    """7.1b / H1: intercambios previos de ESTA conversacion y ESTE usuario (solo con CHATBOT_ORQUESTADOR_ACTIVO y
+    CHATBOT_HISTORIAL_ACTIVO); [] en cualquier otro caso. Se lee ANTES de liberar la conexion del RPC. Si la lectura falla la
+    pregunta se responde sin historial: el historial nunca bloquea una respuesta."""
+    if not (settings.chatbot_orquestador_activo and settings.chatbot_historial_activo):
+        return []
+    try:
+        return leer_intercambios(db, conversacion_id, usuario_id, mensaje_id)
+    except Exception:  # noqa: BLE001
+        logger.warning("No se pudo leer el historial de la conversacion %s; se responde sin historial.", conversacion_id)
+        db.rollback()
+        return []
+
+
+async def _pedir_respuesta(payload: dict, db_datos: Session, contenido: str, historial: list[dict] | None = None) -> dict:
     """Pide la respuesta al asistente. Con CHATBOT_ORQUESTADOR_ACTIVO apagado (por defecto) es exactamente
     `solicitar_chatbot(payload)`, el contrato v1 de siempre. Encendido: pipeline v2 del orquestador (resolutor,
     contexto, RPC v2, validador de cifras, sanitizacion). Devuelve la misma forma de respuesta que el camino v1
@@ -240,7 +265,7 @@ async def _pedir_respuesta(payload: dict, db_datos: Session, contenido: str) -> 
     from services.orquestador.pipeline import responder
 
     metadatos = {k: payload[k] for k in ("usuario_id", "consentimiento_entrenamiento", "conversacion_id", "mensaje_id", "intento") if k in payload}
-    resultado = await responder(contenido, db_datos, metadatos)
+    resultado = await responder(contenido, db_datos, metadatos, historial=historial)
     if resultado["accion"] == "error":
         return {"status": "error", "tipo": resultado["tipo"], "detail": resultado["detail"]}
     return {"status": "ok", "response": resultado["texto"], "_v2": resultado["meta"]}
@@ -304,6 +329,7 @@ async def _procesar(
     # quedan expirados: de aqui en adelante solo se usan `mensaje_id` e `intento`.
     mensaje_id = mensaje_usuario.id
     intento = mensaje_usuario.intentos
+    historial = _historial(db, conversacion.id, current_user.id, mensaje_id)
     payload = {
         "mensaje": mensaje_usuario.contenido,
         "usuario_id": current_user.id,
@@ -318,7 +344,7 @@ async def _procesar(
     db_usuarios.rollback()
 
     try:
-        respuesta = await _pedir_respuesta(payload, db_usuarios, payload["mensaje"])
+        respuesta = await _pedir_respuesta(payload, db_usuarios, payload["mensaje"], historial=historial)
     except ChatbotTimeoutError as error:
         return _fallo(db, mensaje_id, intento, 504, str(error), chatbot_estados.DETALLE_TIMEOUT)
     except asyncio.CancelledError:
@@ -355,6 +381,7 @@ async def _procesar(
         )
     if cerrado is None:
         return _descartado(db, mensaje_id)  # cancelado, barrido o intento posterior: la respuesta se descarta
+    adjuntar_grafica(cerrado[1], respuesta.get("_v2"))
     return IntercambioResponse(mensaje_usuario=cerrado[0], mensaje_asistente=cerrado[1])
 
 
